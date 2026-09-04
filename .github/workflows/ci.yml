@@ -2,12 +2,16 @@ name: Rust CI
 
 on:
   push:
-    branches: [main, stable, dev]
+    branches: [stable, dev]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -22,6 +26,9 @@ jobs:
 
       - name: Check publication contents
         run: python scripts/check_publication.py
+
+      - name: Check release configuration
+        run: python scripts/check_release.py
 
       - name: Install Rust
         run: |

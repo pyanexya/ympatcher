@@ -1,0 +1,103 @@
+name: Build latest client
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Upstream channel (independent of stable/dev patcher branch)
+        type: choice
+        options: [stable, beta]
+        default: stable
+      format:
+        description: Output format
+        type: choice
+        options: [apk, apks]
+        default: apk
+      discord_rpc:
+        description: Embed Discord Presence (requires DISCORD_SOCIAL_SDK_URL)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-${{ github.ref }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      UPSTREAM_CHANNEL: ${{ inputs.channel }}
+      OUTPUT_FORMAT: ${{ inputs.format }}
+      INCLUDE_DISCORD: ${{ inputs.discord_rpc }}
+      SIGNING_P12_BASE64: ${{ secrets.SIGNING_P12_BASE64 }}
+      SIGNING_JSON_BASE64: ${{ secrets.SIGNING_JSON_BASE64 }}
+      DISCORD_SOCIAL_SDK_URL: ${{ secrets.DISCORD_SOCIAL_SDK_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Restore optional signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$SIGNING_P12_BASE64" || -n "$SIGNING_JSON_BASE64" ]]; then
+            test -n "$SIGNING_P12_BASE64" && test -n "$SIGNING_JSON_BASE64"
+            mkdir -p "$RUNNER_TEMP/ympatch-state/signing"
+            printf '%s' "$SIGNING_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/ympatch-state/signing/ympatcher.p12"
+            printf '%s' "$SIGNING_JSON_BASE64" | base64 --decode > "$RUNNER_TEMP/ympatch-state/signing/signing.json"
+            chmod 600 "$RUNNER_TEMP/ympatch-state/signing/"*
+          else
+            echo "::warning::No persistent signing secrets: this run creates a new key, so its APK cannot update installations signed by another key."
+          fi
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        if: inputs.discord_rpc
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        if: inputs.discord_rpc
+        with:
+          gradle-version: "8.13"
+      - name: Build embedded Presence
+        if: inputs.discord_rpc
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_SOCIAL_SDK_URL" || { echo "Missing DISCORD_SOCIAL_SDK_URL" >&2; exit 1; }
+          mkdir -p presence/app/libs
+          curl --fail --silent --show-error --location \
+            --output presence/app/libs/discord_partner_sdk.aar "$DISCORD_SOCIAL_SDK_URL"
+          gradle -p presence :embedded:assembleRelease --no-daemon
+      - name: Build and patch latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked
+          mkdir -p dist
+          version="$(jq -r .version release.json)"
+          lane="$(jq -r .lane release.json)"
+          output="dist/yandex-music-$lane-v$version.$OUTPUT_FORMAT"
+          args=(--latest --channel "$UPSTREAM_CHANNEL" --state-dir "$RUNNER_TEMP/ympatch-state" --output "$output")
+          if [[ "$INCLUDE_DISCORD" == "true" ]]; then
+            args+=(--patch about --patch experiments --patch session-compat --patch discord-rpc
+              --discord-embedded-aar presence/embedded/build/outputs/aar/embedded-release.aar
+              --discord-sdk-aar presence/app/libs/discord_partner_sdk.aar)
+          fi
+          ./target/release/ympatcher "${args[@]}"
+          sha256sum "$output" > "$output.sha256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: client-${{ github.ref_name }}-${{ inputs.channel }}
+          path: |
+            dist/*.apk
+            dist/*.apks
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 3

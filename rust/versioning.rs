@@ -15,10 +15,10 @@ impl VersionSpoof {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if let Some(name) = &self.version_name {
-            if name.trim().is_empty() || name.contains(['\r', '\n']) {
-                bail!("spoof versionName должен быть непустой строкой без переносов");
-            }
+        if let Some(name) = &self.version_name
+            && (name.trim().is_empty() || name.contains(['\r', '\n']))
+        {
+            bail!("spoof versionName должен быть непустой строкой без переносов");
         }
         if self.technical_version_code == Some(0) {
             bail!("technical versionCode должен быть больше нуля");

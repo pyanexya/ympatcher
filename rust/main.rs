@@ -294,17 +294,17 @@ fn real_main() -> Result<()> {
         .map(|value| value.base_apk().map(PathBuf::from))
         .transpose()?
         .expect("source was validated");
-    if let Some(package) = &downloaded {
-        if package.release.format != PackageFormat::MonolithicApk {
-            let toolchain = tools::prepare_toolchain(&state_dir)?;
-            for file in &package.files {
-                let certificate = signing::verify_apk(&file.path, &toolchain)?;
-                if certificate != compatibility::official_certificate() {
-                    anyhow::bail!(
-                        "split {} не подписан официальным сертификатом: {certificate}",
-                        file.path.display()
-                    );
-                }
+    if let Some(package) = &downloaded
+        && package.release.format != PackageFormat::MonolithicApk
+    {
+        let toolchain = tools::prepare_toolchain(&state_dir)?;
+        for file in &package.files {
+            let certificate = signing::verify_apk(&file.path, &toolchain)?;
+            if certificate != compatibility::official_certificate() {
+                anyhow::bail!(
+                    "split {} не подписан официальным сертификатом: {certificate}",
+                    file.path.display()
+                );
             }
         }
     }

@@ -1,8 +1,8 @@
 [package]
 name = "ympatcher"
-version = "0.6.0"
+version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 authors = ["Pyanexya aka Pyanexy"]
 description = "Guarded Rust patcher for the Yandex Music Android client"

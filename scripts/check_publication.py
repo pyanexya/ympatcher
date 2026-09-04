@@ -26,7 +26,7 @@ def check():
             continue
         if (path.suffix.lower() in FORBIDDEN or path.name == "signing.json"
                 or path.name == ".env" or path.name.startswith(".env.") and path.name != ".env.example"
-                or name.startswith((".ympatch/", "dist/", "target/", "reports/android/"))):
+                or name.startswith((".ympatch/", "dist/", "target/", "reports/android/", "compatibility/android/reports/"))):
             errors.append(f"Private/generated artifact: {name}")
         content = path.read_bytes()
         if len(content) > 4 * 1024 * 1024:
