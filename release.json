@@ -1,5 +1,5 @@
 {
-  "lane": "stable",
-  "version": "0.5.0",
+  "lane": "dev",
+  "version": "0.5.5",
   "upstreamChannel": "stable"
 }
