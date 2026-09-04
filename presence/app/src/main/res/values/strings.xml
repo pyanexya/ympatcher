@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">ympresence</string>
+    <string name="app_description">Shows the current Yandex Music track in Discord through the official Social SDK.</string>
+    <string name="logo_description">ympresence logo</string>
+    <string name="listener_label">Yandex Music playback</string>
+    <string name="enable_presence">Discord Presence</string>
+    <string name="enable_presence_summary">Updates immediately while Yandex Music is playing</string>
+    <string name="setup_title">Connection</string>
+    <string name="grant_access">Grant notification access</string>
+    <string name="open_access_settings">Open access settings</string>
+    <string name="status_access_granted">✓ Yandex Music playback access is enabled</string>
+    <string name="status_access_missing">1. Notification access is required</string>
+    <string name="status_discord_ready">✓ Discord is installed</string>
+    <string name="status_discord_missing">2. Install and sign in to Discord</string>
+    <string name="current_track">Current track</string>
+    <string name="no_track">Nothing is playing yet</string>
+    <string name="unknown_track">Unknown track</string>
+    <string name="unknown_artist">Unknown artist</string>
+    <string name="status_waiting_track">Waiting for Yandex Music</string>
+    <string name="status_published">Published to Discord</string>
+    <string name="status_paused">Paused</string>
+    <string name="status_paused_hidden">Paused · hidden from Discord</string>
+    <string name="status_disabled">Presence is disabled</string>
+    <string name="status_rpc_error">Could not start Discord RPC</string>
+    <string name="privacy_note">No Discord token is requested or stored. Track data is sent only to the signed-in Discord app on this device.</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="activity_type">Activity type</string>
+    <string name="activity_listening">Listening</string>
+    <string name="activity_playing">Playing</string>
+    <string name="activity_watching">Watching</string>
+    <string name="show_artwork">Show cover artwork</string>
+    <string name="show_progress">Show track progress</string>
+    <string name="show_link">Add track link</string>
+    <string name="show_paused">Keep Presence while paused</string>
+    <string name="artist_first">Show artist on the first line</string>
+</resources>

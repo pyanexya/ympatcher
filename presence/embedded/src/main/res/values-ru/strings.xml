@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ymp_presence_summary">Текущий трек в Discord без токена аккаунта</string>
+    <string name="ymp_presence_enable">Включить Presence</string>
+    <string name="ymp_presence_activity_type">Тип активности</string>
+    <string name="ymp_presence_display">Отображение и приватность</string>
+    <string name="ymp_presence_artwork">Показывать обложку</string>
+    <string name="ymp_presence_progress">Показывать прогресс трека</string>
+    <string name="ymp_presence_link">Добавлять ссылку на трек</string>
+    <string name="ymp_presence_paused">Оставлять Presence на паузе</string>
+    <string name="ymp_presence_artist_first">Исполнитель первой строкой</string>
+    <string name="ymp_presence_listening">Слушает</string>
+    <string name="ymp_presence_playing">Играет</string>
+    <string name="ymp_presence_watching">Смотрит</string>
+</resources>

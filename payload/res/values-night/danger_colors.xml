@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="danger_background">#FF101010</color>
+    <color name="danger_surface">#FF1D1D1D</color>
+    <color name="danger_surface_pressed">#FF2A2A2A</color>
+    <color name="danger_stroke">#FF303030</color>
+    <color name="danger_text_primary">#FFFFFFFF</color>
+    <color name="danger_text_secondary">#FF969696</color>
+    <color name="danger_accent">#FFFFD600</color>
+    <color name="danger_scrim">#66000000</color>
+</resources>

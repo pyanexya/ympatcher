@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="danger_about_title" translatable="false">Pyanexy Patcher</string>
+    <string name="danger_about_subtitle" translatable="true">Patched by Pyanexya · v0.5.0</string>
+    <string name="danger_about_version" translatable="false">ympatcher v0.5.0</string>
+    <string name="danger_about_build_details" translatable="false">Build information is stored in assets/danger-patch.json</string>
+    <string name="danger_about_description" translatable="true">An unofficial client patch by Pyanexya aka Pyanexy. Experiments and updates stay under your control.</string>
+    <string name="danger_about_github" translatable="false">GitHub · pyanexya/ympatcher</string>
+    <string name="danger_brand_description" translatable="true">ympatcher logo</string>
+    <string name="danger_close" translatable="true">Close</string>
+    <string name="danger_about_experiments_title" translatable="true">Developer experiments</string>
+    <string name="danger_about_experiments_subtitle" translatable="true">Search and override mobile flags</string>
+    <string name="danger_presence_title" translatable="true">Discord Rich Presence</string>
+    <string name="danger_presence_subtitle" translatable="true">Track status, artwork and privacy</string>
+    <string name="danger_dev_title" translatable="true">Developer experiments</string>
+    <string name="danger_experiment_count_suffix" translatable="true">\u0020experiments · swipe the title to close</string>
+    <string name="danger_force_all_server" translatable="true">Force all · From server</string>
+    <string name="danger_force_all_value" translatable="true">Force all ·\u0020</string>
+    <string name="danger_reset" translatable="true">Reset to default</string>
+    <string name="danger_search_hint" translatable="true">Search experiments</string>
+    <string name="danger_group_title" translatable="true">EXPERIMENT GROUP</string>
+    <string name="danger_current_override" translatable="true">Current override:\u0020</string>
+    <string name="danger_force_all_title" translatable="true">Force all experiments</string>
+    <string name="danger_from_server" translatable="true">From server</string>
+    <string name="danger_value_default" translatable="true">default · off</string>
+    <string name="danger_value_on" translatable="true">on · enabled</string>
+    <string name="danger_value_on1" translatable="true">on1 · variant</string>
+    <string name="danger_value_control" translatable="false">control</string>
+    <string name="danger_override_saved" translatable="true">Override saved · restart Yandex Music</string>
+    <string name="danger_defaults_restored" translatable="true">Server defaults restored · restart Yandex Music</string>
+</resources>

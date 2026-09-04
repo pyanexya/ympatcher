@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/danger_about_scrim"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/danger_scrim"
+    android:clickable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/danger_sheet_background"
+        android:clickable="true"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingLeft="24dp"
+        android:paddingTop="10dp"
+        android:paddingRight="24dp"
+        android:paddingBottom="24dp">
+
+        <View
+            android:layout_width="44dp"
+            android:layout_height="5dp"
+            android:background="@drawable/danger_drag_handle" />
+
+        <ImageView
+            android:layout_width="104dp"
+            android:layout_height="104dp"
+            android:layout_marginTop="22dp"
+            android:adjustViewBounds="true"
+            android:contentDescription="@string/danger_brand_description"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ympatcher_mark" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:gravity="center"
+            android:text="@string/danger_about_title"
+            android:textColor="@color/danger_text_primary"
+            android:textSize="25sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:text="@string/danger_about_version"
+            android:textColor="@color/danger_text_secondary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="center"
+            android:lineSpacingExtra="3dp"
+            android:text="@string/danger_about_description"
+            android:textColor="@color/danger_text_primary"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/danger_about_details"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:gravity="center"
+            android:lineSpacingExtra="2dp"
+            android:text="@string/danger_about_build_details"
+            android:textColor="@color/danger_text_secondary"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/danger_about_github"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="22dp"
+            android:background="@drawable/danger_force_background"
+            android:gravity="center"
+            android:text="@string/danger_about_github"
+            android:textColor="@color/danger_text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/danger_about_close"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/danger_close"
+            android:textColor="@color/danger_text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</FrameLayout>

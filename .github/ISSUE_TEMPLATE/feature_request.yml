@@ -1,0 +1,30 @@
+name: Предложение
+description: Предложить функцию или улучшение
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему это решает
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое поведение
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Раздел
+      options:
+        - Интерфейс
+        - Эксперименты
+        - Обновления
+        - Discord Presence
+        - Датамайнер
+        - Другое
+    validations:
+      required: true

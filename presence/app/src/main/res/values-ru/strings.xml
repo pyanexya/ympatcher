@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_description">Показывает текущий трек Яндекс Музыки в Discord через официальный Social SDK.</string>
+    <string name="logo_description">Логотип ympresence</string>
+    <string name="listener_label">Воспроизведение Яндекс Музыки</string>
+    <string name="enable_presence">Discord Presence</string>
+    <string name="enable_presence_summary">Обновляется сразу во время воспроизведения</string>
+    <string name="setup_title">Подключение</string>
+    <string name="grant_access">Разрешить доступ к уведомлениям</string>
+    <string name="open_access_settings">Открыть настройки доступа</string>
+    <string name="status_access_granted">✓ Доступ к воспроизведению включён</string>
+    <string name="status_access_missing">1. Нужен доступ к уведомлениям</string>
+    <string name="status_discord_ready">✓ Discord установлен</string>
+    <string name="status_discord_missing">2. Установите Discord и войдите в аккаунт</string>
+    <string name="current_track">Текущий трек</string>
+    <string name="no_track">Пока ничего не играет</string>
+    <string name="unknown_track">Неизвестный трек</string>
+    <string name="unknown_artist">Неизвестный исполнитель</string>
+    <string name="status_waiting_track">Ожидаю Яндекс Музыку</string>
+    <string name="status_published">Опубликовано в Discord</string>
+    <string name="status_paused">Пауза</string>
+    <string name="status_paused_hidden">Пауза · скрыто из Discord</string>
+    <string name="status_disabled">Presence выключен</string>
+    <string name="status_rpc_error">Не удалось запустить Discord RPC</string>
+    <string name="privacy_note">Токен Discord не запрашивается и не сохраняется. Данные трека передаются только авторизованному приложению Discord на этом устройстве.</string>
+    <string name="appearance_title">Внешний вид</string>
+    <string name="activity_type">Тип активности</string>
+    <string name="activity_listening">Слушает</string>
+    <string name="activity_playing">Играет</string>
+    <string name="activity_watching">Смотрит</string>
+    <string name="show_artwork">Показывать обложку</string>
+    <string name="show_progress">Показывать прогресс трека</string>
+    <string name="show_link">Добавлять ссылку на трек</string>
+    <string name="show_paused">Оставлять Presence на паузе</string>
+    <string name="artist_first">Показывать исполнителя первой строкой</string>
+</resources>

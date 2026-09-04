@@ -1,0 +1,113 @@
+name: Release ympatcher
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Validate tag and branch lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tags must point to a commit contained in main." >&2
+            exit 1
+          }
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Stable release"
+          elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(dev|beta|rc)\.[0-9]+$ ]]; then
+            echo "Prerelease"
+          else
+            echo "Unsupported release tag: $tag" >&2
+            exit 1
+          fi
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all --locked
+      - run: python scripts/check_publication.py
+
+  build-linux:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build
+        run: cargo build --release --locked
+      - name: Prepare binary
+        run: |
+          mkdir dist
+          cp target/release/ympatcher dist/ympatcher-linux-x86_64
+          sha256sum dist/ympatcher-linux-x86_64 > dist/ympatcher-linux-x86_64.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-linux
+          path: dist/*
+          if-no-files-found: error
+
+  build-windows:
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build
+        run: cargo build --release --locked
+      - name: Prepare binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist
+          Copy-Item -LiteralPath target/release/ympatcher.exe -Destination dist/ympatcher-windows-x86_64.exe
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath dist/ympatcher-windows-x86_64.exe).Hash.ToLowerInvariant()
+          "$hash  ympatcher-windows-x86_64.exe" | Set-Content -NoNewline dist/ympatcher-windows-x86_64.exe.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          args=(release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ympatcher $RELEASE_TAG by Pyanexya" \
+            --generate-notes)
+          [[ "$RELEASE_TAG" == *-* ]] && args+=(--prerelease)
+          gh "${args[@]}"

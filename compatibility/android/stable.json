@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 2,
+  "packageName": "ru.yandex.music",
+  "lane": "stable",
+  "releases": [
+    {
+      "versionName": "2026.08.2 #160rur",
+      "versionCode": 24026421,
+      "channel": "stable",
+      "source": "legacy-rustore",
+      "sourceSha256": "8a7d254d2186c7cab5921873cbc489145def7aad0284bb1b6a16c85445861b95",
+      "officialCertificateSha256": "aca405ded8b25cb2e8c6da69425d2b4307d087c1276fc06ad5942731ccc51dba",
+      "architectures": ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"],
+      "packageFormat": "monolithic-apk",
+      "compatibilityStatus": "supported",
+      "patcherVersion": "0.2.0",
+      "discoveredAt": "2026-08-27",
+      "verifiedAt": "2026-08-27",
+      "incompatibleReason": null
+    },
+    {
+      "versionName": "2026.08.3 #161rur",
+      "versionCode": 24026431,
+      "channel": "stable",
+      "source": "legacy-rustore",
+      "sourceSha256": "286f6cea9643182d3c47d6a63e1e1f8229450fde6f7011148fccdc0cb68e5ca2",
+      "officialCertificateSha256": "aca405ded8b25cb2e8c6da69425d2b4307d087c1276fc06ad5942731ccc51dba",
+      "architectures": ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"],
+      "packageFormat": "monolithic-apk",
+      "compatibilityStatus": "supported",
+      "patcherVersion": "0.3.0",
+      "discoveredAt": "2026-09-02",
+      "verifiedAt": "2026-09-02",
+      "incompatibleReason": null
+    },
+    {
+      "versionName": "2026.08.4 #162.1gpr",
+      "versionCode": 24026442,
+      "channel": "stable",
+      "source": "ympatcher-api",
+      "sourceSha256": "35f375344eaff754c389d57eb341073d008998faa1d674fef4d8ec56cfafdf2f",
+      "officialCertificateSha256": "aca405ded8b25cb2e8c6da69425d2b4307d087c1276fc06ad5942731ccc51dba",
+      "architectures": ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"],
+      "packageFormat": "split-apks",
+      "compatibilityStatus": "supported",
+      "patcherVersion": "0.5.0",
+      "discoveredAt": "2026-09-03",
+      "verifiedAt": "2026-09-03",
+      "incompatibleReason": null
+    }
+  ]
+}

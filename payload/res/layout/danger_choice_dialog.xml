@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="20dp"
+    android:background="@drawable/danger_dialog_background"
+    android:orientation="vertical"
+    android:padding="22dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/danger_group_title"
+        android:textColor="@color/danger_text_secondary"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/danger_choice_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:ellipsize="middle"
+        android:maxLines="2"
+        android:textColor="@color/danger_text_primary"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/danger_choice_current"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:layout_marginBottom="14dp"
+        android:textColor="@color/danger_text_secondary"
+        android:textSize="13sp" />
+
+    <TextView android:id="@+id/danger_choice_server" style="@style/DangerChoice" android:text="@string/danger_from_server" />
+    <TextView android:id="@+id/danger_choice_default" style="@style/DangerChoice" android:text="@string/danger_value_default" />
+    <TextView android:id="@+id/danger_choice_on" style="@style/DangerChoice" android:text="@string/danger_value_on" />
+    <TextView android:id="@+id/danger_choice_on1" style="@style/DangerChoice" android:text="@string/danger_value_on1" />
+    <TextView android:id="@+id/danger_choice_control" style="@style/DangerChoice" android:text="@string/danger_value_control" />
+</LinearLayout>

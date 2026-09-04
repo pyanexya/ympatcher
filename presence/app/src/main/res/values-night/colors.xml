@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ym_primary">#FFE14A</color>
+    <color name="ym_on_primary">#171717</color>
+    <color name="ym_surface">#121212</color>
+    <color name="ym_on_surface">#F3F3F3</color>
+</resources>

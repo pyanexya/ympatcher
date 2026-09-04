@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="danger_about_subtitle">Патч от Pyanexya · v0.5.0</string>
+    <string name="danger_about_version">ympatcher v0.5.0</string>
+    <string name="danger_about_build_details" translatable="false">Сведения о сборке сохранены в assets/danger-patch.json</string>
+    <string name="danger_about_description">Неофициальный патч клиента от Pyanexya aka Pyanexy. Эксперименты и обновления остаются под вашим контролем.</string>
+    <string name="danger_about_github">GitHub · pyanexya/ympatcher</string>
+    <string name="danger_brand_description">Логотип ympatcher</string>
+    <string name="danger_close">Закрыть</string>
+    <string name="danger_about_experiments_title">Эксперименты для разработчиков</string>
+    <string name="danger_about_experiments_subtitle">Поиск и настройка мобильных флагов</string>
+    <string name="danger_presence_title">Discord Rich Presence</string>
+    <string name="danger_presence_subtitle">Статус трека, обложка и приватность</string>
+    <string name="danger_dev_title">Эксперименты для разработчиков</string>
+    <string name="danger_experiment_count_suffix">\u0020экспериментов · потяните заголовок вниз, чтобы закрыть</string>
+    <string name="danger_force_all_server">Форсировать все · С сервера</string>
+    <string name="danger_force_all_value">Форсировать все ·\u0020</string>
+    <string name="danger_reset">Сбросить настройки</string>
+    <string name="danger_search_hint">Поиск экспериментов</string>
+    <string name="danger_group_title">ГРУППА ЭКСПЕРИМЕНТА</string>
+    <string name="danger_current_override">Текущее значение:\u0020</string>
+    <string name="danger_force_all_title">Форсировать все эксперименты</string>
+    <string name="danger_from_server">С сервера</string>
+    <string name="danger_value_default">default · выключено</string>
+    <string name="danger_value_on">on · включено</string>
+    <string name="danger_value_on1">on1 · вариант</string>
+    <string name="danger_override_saved">Настройка сохранена · перезапустите Яндекс Музыку</string>
+    <string name="danger_defaults_restored">Серверные настройки восстановлены · перезапустите Яндекс Музыку</string>
+</resources>

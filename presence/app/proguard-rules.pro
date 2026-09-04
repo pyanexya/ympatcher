@@ -1,0 +1,2 @@
+-keep class com.discord.socialsdk.** { *; }
+-keep class dev.pyanexy.ympresence.NativePresence { *; }

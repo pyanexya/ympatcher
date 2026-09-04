@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="DangerBottomSheetAnimation">
+        <item name="android:windowEnterAnimation">@anim/danger_slide_up</item>
+        <item name="android:windowExitAnimation">@anim/danger_slide_down</item>
+    </style>
+    <style name="DangerBottomSheetTheme" parent="@style/AppTheme.Transparent">
+        <item name="android:windowAnimationStyle">@style/DangerBottomSheetAnimation</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:colorAccent">@color/danger_accent</item>
+        <item name="android:navigationBarColor">@color/danger_background</item>
+    </style>
+    <style name="DangerChoice">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">54dp</item>
+        <item name="android:layout_marginTop">7dp</item>
+        <item name="android:background">@drawable/danger_choice_background</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingLeft">17dp</item>
+        <item name="android:paddingRight">17dp</item>
+        <item name="android:textColor">@color/danger_text_primary</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+</resources>

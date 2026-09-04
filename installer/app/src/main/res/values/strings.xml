@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">YMPatcher Installer</string>
+    <string name="title">Yandex Music patched</string>
+    <string name="ready">Installs the bundled patched client without resetting existing data.</string>
+    <string name="install">Install / update</string>
+    <string name="installing">Preparing compatible splits…</string>
+    <string name="install_prompt">Confirm the system install prompt to finish.</string>
+    <string name="install_success">Yandex Music patched is installed.</string>
+    <string name="install_failed">Install failed: %1$s</string>
+    <string name="allow_unknown_sources">Allow installs from this app, then return and tap install again.</string>
+</resources>

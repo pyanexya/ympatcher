@@ -1,0 +1,44 @@
+name: Ошибка
+description: Сообщить о проблеме в готовом APK
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Перед отправкой выполните Reset to default в экспериментах и проверьте проблему ещё раз.
+  - type: input
+    id: patcher-version
+    attributes:
+      label: Версия ympatcher
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: input
+    id: music-version
+    attributes:
+      label: Версия Яндекс Музыки
+      placeholder: 2026.08.3 #161rur
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло
+      description: Опишите ожидаемое и фактическое поведение.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      placeholder: |
+        1. Открыть…
+        2. Нажать…
+        3. Увидеть…
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Дополнительная информация
+      description: Модель телефона, версия Android, скриншоты. Не прикладывайте APK, токены и данные аккаунта.

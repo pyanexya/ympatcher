@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Ympatcher.Presence" parent="android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#FFD600</item>
+        <item name="android:navigationBarColor">?android:attr/colorBackground</item>
+        <item name="android:statusBarColor">?android:attr/colorBackground</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

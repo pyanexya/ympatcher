@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ymp_presence_title">Discord Presence</string>
+    <string name="ymp_presence_summary">Current track in Discord without an account token</string>
+    <string name="ymp_presence_enable">Enable Presence</string>
+    <string name="ymp_presence_activity_type">Activity type</string>
+    <string name="ymp_presence_display">Display and privacy</string>
+    <string name="ymp_presence_artwork">Show cover artwork</string>
+    <string name="ymp_presence_progress">Show track progress</string>
+    <string name="ymp_presence_link">Add track link</string>
+    <string name="ymp_presence_paused">Keep Presence while paused</string>
+    <string name="ymp_presence_artist_first">Show artist on the first line</string>
+    <string name="ymp_presence_listening">Listening</string>
+    <string name="ymp_presence_playing">Playing</string>
+    <string name="ymp_presence_watching">Watching</string>
+</resources>
