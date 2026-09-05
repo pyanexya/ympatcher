@@ -192,6 +192,7 @@ enum RendererApi {
     Legacy,
     Compose161,
     Compose162,
+    Compose163,
 }
 
 fn about_row_legacy(drawable_id: u32, title_id: u32, subtitle_id: u32) -> String {
@@ -272,12 +273,46 @@ fn about_row_compose162(drawable_id: u32, title_id: u32, subtitle_id: u32) -> St
     )
 }
 
+fn about_row_compose163(drawable_id: u32, title_id: u32, subtitle_id: u32) -> String {
+    format!(
+        r#"
+
+    # {ABOUT_MARKER}
+    sget-object v2, Ldanger/DevExperiments;->a:Landroid/content/Context;
+    const v3, 0x{title_id:08x}
+    invoke-virtual {{v2, v3}}, Landroid/content/Context;->getString(I)Ljava/lang/String;
+    move-result-object v2
+    sget-object v3, Ldanger/DevExperiments;->a:Landroid/content/Context;
+    const v4, 0x{subtitle_id:08x}
+    invoke-virtual {{v3, v4}}, Landroid/content/Context;->getString(I)Ljava/lang/String;
+    move-result-object v3
+    sget-object v4, Ldanger/OpenAbout;->a:Ldanger/OpenAbout;
+    sget-object v5, Le2j;->a:Le2j;
+    const v6, 0x{drawable_id:08x}
+    invoke-static {{v6}}, Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;
+    move-result-object v6
+    move-object v7, v0
+    const/16 v8, 0xc00
+    const/16 v9, 0x10
+    invoke-static/range {{v2 .. v9}}, Lm4e;->a(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lh2j;Ljava/lang/Integer;Le46;II)V
+"#
+    )
+}
+
 fn apply_about(
     decoded: &Path,
     version_name: &str,
     version_code: &str,
 ) -> Result<(PathBuf, u32, u32, u32, RendererApi)> {
-    let (file_name, anchor, api) = if version_code == "24026442" {
+    let (file_name, anchor, api) = if version_code == "24026461" {
+        (
+            "ige.smali",
+            Regex::new(
+                r#"(?s)const-string v2, "settings_about_button".{0,600}?invoke-static/range \{v2 \.\. v9\}, Lm4e;->a\(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lh2j;Ljava/lang/Integer;Le46;II\)V"#,
+            )?,
+            RendererApi::Compose163,
+        )
+    } else if version_code == "24026442" {
         (
             "wee.smali",
             Regex::new(
@@ -338,6 +373,7 @@ fn apply_about(
         RendererApi::Legacy => about_row_legacy(info_icon_id, string_ids[0], string_ids[1]),
         RendererApi::Compose161 => about_row_compose161(info_icon_id, string_ids[0], string_ids[1]),
         RendererApi::Compose162 => about_row_compose162(info_icon_id, string_ids[0], string_ids[1]),
+        RendererApi::Compose163 => about_row_compose163(info_icon_id, string_ids[0], string_ids[1]),
     });
     patched.push_str(&text[found.end()..]);
     write(&renderer, &patched)?;
@@ -421,7 +457,7 @@ fn apply_about(
         "baseVersionName": version_name,
         "baseVersionCode": version_code,
         "author": "Pyanexya aka Pyanexy",
-        "github": "pyanexu",
+        "github": "pyanexya/ympatcher",
         "ui": "localized-adaptive-bottom-sheet"
     });
     write(
@@ -441,6 +477,7 @@ fn extract_experiments(decoded: &Path, api: RendererApi) -> Result<Vec<String>> 
         RendererApi::Legacy => "yu0.smali",
         RendererApi::Compose161 => "cv0.smali",
         RendererApi::Compose162 => "kw0.smali",
+        RendererApi::Compose163 => "zw0.smali",
     };
     let registries = candidates(decoded, registry_file);
     for path in &registries {
@@ -481,7 +518,7 @@ fn extract_experiments(decoded: &Path, api: RendererApi) -> Result<Vec<String>> 
             continue;
         };
         let text = read(&path)?;
-        if api != RendererApi::Compose162
+        if !matches!(api, RendererApi::Compose162 | RendererApi::Compose163)
             && !(text.contains(".super Lm0c;") || text.contains(".super Lxq7;"))
         {
             continue;
@@ -522,6 +559,11 @@ fn copy_payload_resources(decoded: &Path) -> Result<()> {
             fs::create_dir_all(parent)?;
         }
         fs::copy(entry.path(), destination)?;
+    }
+    for relative in ["values/danger_strings.xml", "values-ru/danger_strings.xml"] {
+        let path = decoded.join("res").join(relative);
+        let text = read(&path)?;
+        write(&path, &text.replace("v0.5.0", &format!("v{PATCH_VERSION}")))?;
     }
     Ok(())
 }
@@ -604,6 +646,17 @@ fn dev_row_compose162(drawable_id: u32, title_id: u32, subtitle_id: u32) -> Stri
     )
 }
 
+fn dev_row_compose163(drawable_id: u32, title_id: u32, subtitle_id: u32) -> String {
+    let mut row = about_row_compose163(drawable_id, title_id, subtitle_id)
+        .replace(ABOUT_MARKER, DEV_MARKER)
+        .replace(
+            "Ldanger/OpenAbout;->a:Ldanger/OpenAbout;",
+            "Ldanger/OpenDevExperiments;->a:Ldanger/OpenDevExperiments;",
+        );
+    row.push('\n');
+    row
+}
+
 fn presence_row(api: RendererApi, drawable_id: u32, title_id: u32, subtitle_id: u32) -> String {
     match api {
         RendererApi::Legacy => about_row_legacy(drawable_id, title_id, subtitle_id)
@@ -613,6 +666,9 @@ fn presence_row(api: RendererApi, drawable_id: u32, title_id: u32, subtitle_id: 
             .replace(ABOUT_MARKER, "ympatcher:discord-rpc:v0.5.0")
             .replace("Ldanger/OpenAbout;", "Ldanger/OpenDiscordPresence;"),
         RendererApi::Compose162 => about_row_compose162(drawable_id, title_id, subtitle_id)
+            .replace(ABOUT_MARKER, "ympatcher:discord-rpc:v0.5.0")
+            .replace("Ldanger/OpenAbout;", "Ldanger/OpenDiscordPresence;"),
+        RendererApi::Compose163 => about_row_compose163(drawable_id, title_id, subtitle_id)
             .replace(ABOUT_MARKER, "ympatcher:discord-rpc:v0.5.0")
             .replace("Ldanger/OpenAbout;", "Ldanger/OpenDiscordPresence;"),
     }
@@ -657,6 +713,9 @@ fn apply_discord_row(decoded: &Path, renderer: &Path, api: RendererApi) -> Resul
         RendererApi::Compose162 => {
             "invoke-static/range {v2 .. v9}, Ln1e;->a(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lv0j;Ljava/lang/Integer;Lx26;II)V"
         }
+        RendererApi::Compose163 => {
+            "invoke-static/range {v2 .. v9}, Lm4e;->a(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lh2j;Ljava/lang/Integer;Le46;II)V"
+        }
     };
     let end = text[marker_at..]
         .find(call)
@@ -696,6 +755,10 @@ fn apply_dev_experiments(
             "iec.smali",
             ".method public static h(Liec;Ljava/lang/String;)Ljava/lang/String;",
         ),
+        RendererApi::Compose163 => (
+            "wfc.smali",
+            ".method public static h(Lwfc;Ljava/lang/String;)Ljava/lang/String;",
+        ),
     };
     let (lookup, lookup_text) =
         one_matching(decoded, lookup_file, lookup_fingerprint, "Experiment SDK")?;
@@ -727,6 +790,9 @@ fn apply_dev_experiments(
         RendererApi::Compose162 => {
             "invoke-static/range {v2 .. v9}, Ln1e;->a(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lv0j;Ljava/lang/Integer;Lx26;II)V"
         }
+        RendererApi::Compose163 => {
+            "invoke-static/range {v2 .. v9}, Lm4e;->a(Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lh2j;Ljava/lang/Integer;Le46;II)V"
+        }
     };
     let end = renderer_text[marker..]
         .find(call)
@@ -745,6 +811,9 @@ fn apply_dev_experiments(
                 }
                 RendererApi::Compose162 => {
                     dev_row_compose162(drawable_id, title_id, subtitle_id)
+                }
+                RendererApi::Compose163 => {
+                    dev_row_compose163(drawable_id, title_id, subtitle_id)
                 }
             },
             &renderer_text[end..]
@@ -794,6 +863,7 @@ fn apply_dev_experiments(
 
 fn apply_passport(decoded: &Path, version_code: &str) -> Result<()> {
     let file_name = match version_code {
+        "24026461" => "tx0.smali",
         "24026442" => "dx0.smali",
         "24026431" => "f6v.smali",
         _ => "vjw.smali",

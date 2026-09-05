@@ -9,6 +9,21 @@ use zip::ZipArchive;
 
 const PACKAGE_NAME: &str = "ru.yandex.music";
 
+pub fn detect_device_abi(adb_override: Option<&Path>) -> Result<crate::source::Abi> {
+    let adb = resolve_adb(adb_override)?;
+    let state = run(&adb, ["get-state"])?;
+    if state.trim() != "device" {
+        bail!("ADB-устройство не готово: {:?}", state.trim());
+    }
+    let abilist = run(&adb, ["shell", "getprop", "ro.product.cpu.abilist"])?;
+    let value = if abilist.trim().is_empty() {
+        run(&adb, ["shell", "getprop", "ro.product.cpu.abi"])?
+    } else {
+        abilist
+    };
+    crate::source::Abi::from_device_abi(value.trim())
+}
+
 pub fn guarded_install(
     apk: &Path,
     tools: &Toolchain,
@@ -42,7 +57,7 @@ pub fn guarded_install(
     let installed_cert = verify_apk(&pulled, tools)?;
     if installed_cert != output_cert {
         bail!(
-            "установка остановлена: подписи не совпадают; данные и сессия не изменены\nУстановлено: {installed_cert}\nПатч:       {output_cert}"
+            "Установлена версия Yandex Music с другим сертификатом.\nДля первой установки ympatcher APK нужно удалить существующую установку либо использовать совместимый signing key.\nУстановлено: {installed_cert}\nПатч:       {output_cert}"
         );
     }
     let package_dump = run(&adb, ["shell", "dumpsys", "package", PACKAGE_NAME])?;
@@ -127,7 +142,7 @@ fn guard_device_and_installed(
     let installed_cert = verify_apk(&pulled, tools)?;
     if installed_cert != output_cert {
         bail!(
-            "установка остановлена: подписи не совпадают; данные и сессия не изменены\nУстановлено: {installed_cert}\nПатч:       {output_cert}"
+            "Установлена версия Yandex Music с другим сертификатом.\nДля первой установки ympatcher APK нужно удалить существующую установку либо использовать совместимый signing key.\nУстановлено: {installed_cert}\nПатч:       {output_cert}"
         );
     }
     let package_dump = run(adb, ["shell", "dumpsys", "package", PACKAGE_NAME])?;

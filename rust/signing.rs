@@ -41,14 +41,18 @@ pub fn ensure_signing_identity(
     }
     if keystore.exists() {
         let data: SigningDescriptor = serde_json::from_slice(&fs::read(&descriptor)?)?;
-        return Ok((
-            SigningIdentity {
-                keystore,
-                alias: data.alias,
-                password: data.password,
-            },
-            false,
-        ));
+        if data.alias.trim().is_empty() || data.password.is_empty() {
+            bail!("повреждено состояние подписи в {}", directory.display());
+        }
+        let identity = SigningIdentity {
+            keystore,
+            alias: data.alias,
+            password: data.password,
+        };
+        identity_certificate(&identity, tools).context(
+            "существующий signing key повреждён или signing.json не соответствует keystore",
+        )?;
+        return Ok((identity, false));
     }
     let alias = "ympatcher".to_owned();
     let password: String = rand::thread_rng()
@@ -92,6 +96,34 @@ pub fn ensure_signing_identity(
         },
         true,
     ))
+}
+
+pub fn identity_certificate(identity: &SigningIdentity, tools: &Toolchain) -> Result<String> {
+    let args = vec![
+        "-list".into(),
+        "-v".into(),
+        "-keystore".into(),
+        identity.keystore.as_os_str().to_owned(),
+        "-storetype".into(),
+        "PKCS12".into(),
+        "-storepass".into(),
+        identity.password.clone().into(),
+        "-alias".into(),
+        identity.alias.clone().into(),
+    ];
+    let output = run_redacted(&tools.keytool, args, &[&identity.password])?;
+    let regex = Regex::new(r"(?mi)^\s*SHA256:\s*([0-9a-f:]{64,95})\s*$")?;
+    let fingerprint = regex
+        .captures(&output)
+        .and_then(|capture| capture.get(1))
+        .context("keytool не вернул SHA-256 сертификата")?
+        .as_str()
+        .replace(':', "")
+        .to_ascii_lowercase();
+    if fingerprint.len() != 64 {
+        bail!("keytool вернул невалидный SHA-256 сертификата");
+    }
+    Ok(fingerprint)
 }
 
 pub fn verify_apk(apk: &Path, tools: &Toolchain) -> Result<String> {

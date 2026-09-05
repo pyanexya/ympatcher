@@ -11,6 +11,8 @@ import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Log;
 
+import com.discord.socialsdk.DiscordSocialSdkInit;
+
 public final class EmbeddedPresence {
     static final long APPLICATION_ID = 1522963615437553694L;
     static final String PREFS = "ympatcher_presence";
@@ -55,6 +57,7 @@ public final class EmbeddedPresence {
         }
         applicationContext = activity.getApplicationContext();
         engineActivity = activity;
+        DiscordSocialSdkInit.setEngineActivity(activity);
         if (enabled() && startNative()) {
             if (pendingToken != null) {
                 attach(applicationContext, pendingToken);

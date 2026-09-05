@@ -25,6 +25,19 @@ impl VersionSpoof {
         }
         Ok(())
     }
+
+    pub fn validate_against_original(&self, original_version_code: u64) -> Result<()> {
+        self.validate()?;
+        if self
+            .technical_version_code
+            .is_some_and(|code| u64::from(code) < original_version_code)
+        {
+            bail!(
+                "technical versionCode не может быть ниже исходного {original_version_code}: это создаёт downgrade"
+            );
+        }
+        Ok(())
+    }
 }
 
 fn replace_yaml_value(text: &str, key: &str, value: &str) -> Result<String> {
@@ -76,5 +89,26 @@ mod tests {
             technical_version_code: None,
         };
         assert!(spoof.validate().is_err());
+    }
+
+    #[test]
+    fn update_semantics_preserve_or_increase_version_code() {
+        VersionSpoof::default()
+            .validate_against_original(24_026_442)
+            .unwrap();
+        VersionSpoof {
+            version_name: None,
+            technical_version_code: Some(24_026_461),
+        }
+        .validate_against_original(24_026_442)
+        .unwrap();
+        assert!(
+            VersionSpoof {
+                version_name: None,
+                technical_version_code: Some(24_026_441),
+            }
+            .validate_against_original(24_026_442)
+            .is_err()
+        );
     }
 }

@@ -3,13 +3,15 @@ use crate::compatibility;
 use crate::installer::guarded_install;
 use crate::patches::{PatchSelection, PatchSummary, apply_all};
 use crate::process::run;
-use crate::signing::{ensure_signing_identity, sign_apk, verify_apk};
+use crate::signing::{ensure_signing_identity, identity_certificate, sign_apk, verify_apk};
+use crate::source::{Abi, SourceTrust};
 use crate::tools::{prepare_toolchain, sha256_file};
 use crate::versioning::{self, VersionSpoof};
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -19,7 +21,7 @@ pub struct PatchOptions {
     pub state_dir: PathBuf,
     pub work_dir: Option<PathBuf>,
     pub keep_work: bool,
-    pub allow_unknown_source: bool,
+    pub source_trust: SourceTrust,
     pub install: bool,
     pub adb: Option<PathBuf>,
     pub selection: PatchSelection,
@@ -38,6 +40,11 @@ pub struct ReleaseMetadata {
     pub architectures: Vec<String>,
     pub min_sdk: Option<u32>,
     pub file_type: Option<String>,
+    pub abi: Option<Abi>,
+    pub upstream_source: Option<String>,
+    pub releases_api: Option<String>,
+    pub source_verified: Option<bool>,
+    pub source_certificate_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -83,6 +90,20 @@ fn apk_info(decoded: &Path) -> Result<(String, String, String)> {
     Ok((package, value("versionName")?, value("versionCode")?))
 }
 
+fn verify_zip_integrity(apk: &Path) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(File::open(apk)?)
+        .context("final verification: APK не является корректным ZIP")?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .with_context(|| format!("final verification: повреждена ZIP entry #{index}"))?;
+        io::copy(&mut entry, &mut io::sink()).with_context(|| {
+            format!("final verification: CRC/данные {} повреждены", entry.name())
+        })?;
+    }
+    Ok(())
+}
+
 struct MetadataContext<'a> {
     original_name: &'a str,
     original_code: &'a str,
@@ -92,6 +113,7 @@ struct MetadataContext<'a> {
     channel: ReleaseChannel,
     applied_patches: &'a [&'a str],
     release: &'a ReleaseMetadata,
+    signing_certificate: &'a str,
 }
 
 fn enrich_patch_metadata(decoded: &Path, context: MetadataContext<'_>) -> Result<()> {
@@ -108,12 +130,34 @@ fn enrich_patch_metadata(decoded: &Path, context: MetadataContext<'_>) -> Result
     object.insert("displayVersionName".into(), context.display_name.into());
     object.insert("technicalVersionCode".into(), context.technical_code.into());
     object.insert("channel".into(), context.channel.to_string().into());
-    object.insert("sourceSha256".into(), context.source_sha256.into());
+    object.insert("sourceArtifactSha256".into(), context.source_sha256.into());
     object.insert(
         "appliedPatches".into(),
         serde_json::json!(context.applied_patches),
     );
     object.insert("buildDate".into(), chrono::Utc::now().to_rfc3339().into());
+    object.insert("patcherVersion".into(), env!("CARGO_PKG_VERSION").into());
+    object.insert("abi".into(), serde_json::json!(context.release.abi));
+    object.insert(
+        "upstreamSource".into(),
+        serde_json::json!(context.release.upstream_source),
+    );
+    object.insert(
+        "releasesApi".into(),
+        serde_json::json!(context.release.releases_api),
+    );
+    object.insert(
+        "sourceVerified".into(),
+        serde_json::json!(context.release.source_verified),
+    );
+    object.insert(
+        "sourceCertificateSha256".into(),
+        serde_json::json!(context.release.source_certificate_sha256),
+    );
+    object.insert(
+        "signingCertificateSha256".into(),
+        context.signing_certificate.into(),
+    );
     object.insert(
         "sourcePage".into(),
         serde_json::json!(context.release.source_page),
@@ -172,12 +216,38 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
     }
     fs::create_dir_all(&options.state_dir)?;
     let tools = prepare_toolchain(&options.state_dir)?;
-    let source_cert = verify_apk(&options.source, &tools)?;
-    let official_certificate = compatibility::official_certificate();
-    if source_cert != official_certificate && !options.allow_unknown_source {
-        bail!(
-            "сертификат входного APK не официальный\nПолучен:  {source_cert}\nОжидался: {official_certificate}"
-        );
+    match &options.source_trust {
+        SourceTrust::OfficialSignedApk => {
+            let source_cert = verify_apk(&options.source, &tools)?;
+            let official_certificate = compatibility::official_certificate();
+            if source_cert != official_certificate {
+                bail!(
+                    "сертификат входного APK не официальный\nПолучен:  {source_cert}\nОжидался: {official_certificate}"
+                );
+            }
+        }
+        SourceTrust::UserSuppliedUnknown => {
+            verify_apk(&options.source, &tools)
+                .context("пользовательский APK должен иметь валидную подпись")?;
+        }
+        SourceTrust::VerifiedNormalizedArtifact {
+            artifact_size,
+            artifact_sha256,
+            source_cert_sha256,
+            ..
+        } => {
+            let size = options.source.metadata()?.len();
+            if size != *artifact_size {
+                bail!("source provenance: размер cache artifact изменился");
+            }
+            let sha256 = sha256_file(&options.source)?;
+            if !sha256.eq_ignore_ascii_case(artifact_sha256) {
+                bail!("source provenance: SHA-256 cache artifact изменился");
+            }
+            if !source_cert_sha256.eq_ignore_ascii_case(compatibility::official_certificate()) {
+                bail!("source provenance: сертификат origin не официальный");
+            }
+        }
     }
 
     let temporary = if let Some(root) = &options.work_dir {
@@ -205,26 +275,38 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
     run(&tools.java, decode_args).context("apktool decode завершился ошибкой")?;
     let (package, version_name, version_code) = apk_info(&decoded)?;
     let source_sha256 = sha256_file(&options.source)?;
+    if let SourceTrust::VerifiedNormalizedArtifact {
+        package_name,
+        channel,
+        version_name: expected_name,
+        version_code: expected_code,
+        abi: expected_abi,
+        ..
+    } = &options.source_trust
+        && (package != *package_name
+            || version_name != *expected_name
+            || version_code != expected_code.to_string()
+            || options.release_channel != *channel
+            || options.release_metadata.abi != Some(*expected_abi))
+    {
+        bail!(
+            "source provenance: decoded APK metadata не совпадает с API (package={package}, versionName={version_name}, versionCode={version_code})"
+        );
+    }
     let compatibility = compatibility::check(
         options.release_channel,
         &package,
         &version_name,
         &version_code,
-        &source_sha256,
+        options.release_metadata.abi,
         options.allow_untested_version,
     )?;
     let original_version_code = version_code
         .parse::<u64>()
         .context("оригинальный versionCode не является целым числом")?;
-    if options
+    options
         .spoof
-        .technical_version_code
-        .is_some_and(|code| u64::from(code) < original_version_code)
-    {
-        bail!(
-            "technical versionCode не может быть ниже исходного {original_version_code}: это создаёт downgrade"
-        );
-    }
+        .validate_against_original(original_version_code)?;
     let patch = apply_all(&decoded, &version_name, &version_code, options.selection)?;
     if options.selection.discord_rpc {
         let embedded = options
@@ -235,7 +317,13 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
             .discord_sdk_aar
             .as_deref()
             .context("для discord-rpc передайте --discord-sdk-aar FILE")?;
-        crate::presence::inject(&decoded, embedded, sdk, &tools)?;
+        crate::presence::inject(
+            &decoded,
+            embedded,
+            sdk,
+            &tools,
+            options.release_metadata.abi,
+        )?;
     }
     versioning::apply(&decoded, &options.spoof)?;
     let output_version_name = options
@@ -248,6 +336,8 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
         .technical_version_code
         .map(|value| value.to_string())
         .unwrap_or_else(|| version_code.clone());
+    let (identity, signing_key_created) = ensure_signing_identity(&options.state_dir, &tools)?;
+    let signing_certificate = identity_certificate(&identity, &tools)?;
     enrich_patch_metadata(
         &decoded,
         MetadataContext {
@@ -259,6 +349,7 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
             channel: options.release_channel,
             applied_patches: &patch.applied,
             release: &options.release_metadata,
+            signing_certificate: &signing_certificate,
         },
     )?;
 
@@ -272,10 +363,14 @@ pub fn patch_apk(options: PatchOptions) -> Result<PatchResult> {
         decoded.as_os_str().to_owned(),
     ];
     run(&tools.java, build_args).context("apktool build завершился ошибкой")?;
-    let (identity, signing_key_created) = ensure_signing_identity(&options.state_dir, &tools)?;
     sign_apk(&unsigned, &identity, &tools)?;
-    let output_cert = verify_apk(&unsigned, &tools)?;
+    let signed_cert = verify_apk(&unsigned, &tools)?;
+    if signed_cert != signing_certificate {
+        bail!("final verification: APK подписан неожиданным сертификатом");
+    }
     crate::apk::publish(&unsigned, &options.output)?;
+    verify_zip_integrity(&options.output)?;
+    let output_cert = verify_apk(&options.output, &tools)?;
     let install_output = if options.install {
         Some(guarded_install(
             &options.output,

@@ -21,7 +21,7 @@ use channel::ReleaseChannel;
 use clap::{Args, Parser, Subcommand};
 use patcher::{PatchOptions, patch_apk};
 use patches::{PATCH_CATALOG, PatchSelection};
-use source::{PackageFormat, ReleaseProvider};
+use source::{Abi, PackageFormat, ReleaseProvider, SourceTrust};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
@@ -44,14 +44,9 @@ struct Cli {
     /// Yandex Music release channel, independent from the Git branch
     #[arg(long, default_value = "stable")]
     channel: ReleaseChannel,
-    /// Release provider used by --latest (only ympatcher-api is supported)
-    #[arg(
-        long,
-        default_value = "ympatcher-api",
-        requires = "latest",
-        hide = true
-    )]
-    provider: String,
+    /// CPU architecture of the release artifact
+    #[arg(long, requires = "latest")]
+    abi: Option<Abi>,
     /// Output .apk (merged by default) or .apks (preserve splits)
     #[arg(short, long)]
     output: Option<PathBuf>,
@@ -184,12 +179,14 @@ fn latest_output(release: &source::Release) -> PathBuf {
             }
         })
         .collect::<String>();
-    let extension = "apk";
+    let abi = release
+        .abi
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "universal".to_owned());
     PathBuf::from("dist").join(format!(
-        "YandexMusic-{}-{version}-ympatcher-v{}.{}",
+        "YandexMusic-{}-{version}-{abi}-ympatcher-v{}.apk",
         release.channel,
-        patches::PATCH_VERSION,
-        extension
+        patches::PATCH_VERSION
     ))
 }
 
@@ -216,6 +213,7 @@ fn real_main() -> Result<()> {
     }
     init_logging(false);
     let cli = Cli::parse();
+    println!("ympatcher v{}\n", env!("CARGO_PKG_VERSION"));
     if cli.list_patches {
         for patch in PATCH_CATALOG {
             let default = if patch.default_enabled {
@@ -244,21 +242,28 @@ fn real_main() -> Result<()> {
     let selection = PatchSelection::from_ids(&cli.patches)?;
     let requested_input = cli.apk.clone();
     let downloaded = if cli.latest {
-        if cli.provider != "ympatcher-api" {
-            anyhow::bail!("неизвестный release provider: {}", cli.provider);
-        }
         let cancellation = ympatcher::discovery::http::CancellationToken::default();
         let handler_token = cancellation.clone();
         ctrlc::set_handler(move || handler_token.cancel())?;
-        let provider = source::YmpatcherApiProvider::new(cancellation)?;
+        let provider = source::ReleasesApiProvider::new(cancellation)?;
+        let abi = match cli.abi {
+            Some(abi) => abi,
+            None if cli.install => match installer::detect_device_abi(cli.adb.as_deref()) {
+                Ok(abi) => abi,
+                Err(error) => {
+                    eprintln!("  ABI устройства не определён ({error:#}); используется arm64-v8a");
+                    Abi::Arm64V8a
+                }
+            },
+            None => Abi::Arm64V8a,
+        };
+        println!("[1/10] API metadata: канал {} / ABI {}…", cli.channel, abi);
+        let release = provider.latest_for_abi(cli.channel, abi)?;
+        println!("Source:");
+        println!("  API:           {}", source::RELEASES_API_URL);
+        println!("  Channel:       {}", release.channel);
         println!(
-            "[1/10] Проверяю {} для канала {}…",
-            provider.id(),
-            cli.channel
-        );
-        let release = provider.latest(cli.channel)?;
-        println!(
-            "  Версия:       {}",
+            "  Version:       {}",
             release.version_name.as_deref().unwrap_or("unknown")
         );
         println!(
@@ -266,21 +271,25 @@ fn real_main() -> Result<()> {
             release.version_code.unwrap_or_default()
         );
         println!(
-            "  Дата:          {}",
-            release.release_date.as_deref().unwrap_or("unknown")
-        );
-        println!(
             "  Размер:        {} bytes",
             release.expected_size.unwrap_or_default()
         );
-        println!(
-            "  Android:       {} (minSdk {})",
-            release.min_android.as_deref().unwrap_or("unknown"),
-            release.min_sdk.unwrap_or_default()
-        );
         println!("  ABI:           {}", release.architecture.join(", "));
         println!("  Формат:        {}", release.format);
-        println!("[2/10] Скачиваю release только через downloadUrl…");
+        println!("  Source:        Google Play");
+        println!(
+            "  Verified:      {}",
+            if release.source_verified == Some(true) {
+                "yes"
+            } else {
+                "no"
+            }
+        );
+        println!(
+            "  SHA-256:       {}",
+            release.expected_sha256.as_deref().unwrap_or("unknown")
+        );
+        println!("[2/10] Скачиваю immutable artifact URL…");
         Some(provider.download(&release, &state_dir.join("cache"))?)
     } else if let Some(input) = &cli.apk {
         let provider = source::UserImportProvider::new(input.clone(), cli.channel)?;
@@ -289,6 +298,13 @@ fn real_main() -> Result<()> {
     } else {
         unreachable!("source was validated")
     };
+    let mut downloaded = downloaded;
+    if !cli.latest
+        && cli.allow_unknown_source
+        && let Some(package) = &mut downloaded
+    {
+        package.trust = SourceTrust::UserSuppliedUnknown;
+    }
     let source = downloaded
         .as_ref()
         .map(|value| value.base_apk().map(PathBuf::from))
@@ -300,7 +316,9 @@ fn real_main() -> Result<()> {
         let toolchain = tools::prepare_toolchain(&state_dir)?;
         for file in &package.files {
             let certificate = signing::verify_apk(&file.path, &toolchain)?;
-            if certificate != compatibility::official_certificate() {
+            if matches!(package.trust, SourceTrust::OfficialSignedApk)
+                && certificate != compatibility::official_certificate()
+            {
                 anyhow::bail!(
                     "split {} не подписан официальным сертификатом: {certificate}",
                     file.path.display()
@@ -377,7 +395,11 @@ fn real_main() -> Result<()> {
         .map(|directory| directory.path().join("base.apk"))
         .unwrap_or_else(|| output.clone());
     println!("[3/10] Размер и SHA-256 источника проверены.");
-    println!("[4/10] APKM безопасно распакован; base и splits определены.");
+    if is_bundle {
+        println!("[4/10] APKM/APKS безопасно распакован; base и splits определены.");
+    } else {
+        println!("[4/10] Source provenance подтверждён; standalone APK выбран.");
+    }
     println!("[5/10] Проверяю APK и подготавливаю pinned-инструменты…");
     println!("[6/10] Декомпилирую, проверяю fingerprints и применяю патчи…");
     let mut result = patch_apk(PatchOptions {
@@ -386,7 +408,7 @@ fn real_main() -> Result<()> {
         state_dir: state_dir.clone(),
         work_dir: cli.work_dir,
         keep_work: cli.keep_work,
-        allow_unknown_source: cli.allow_unknown_source,
+        source_trust: package.trust.clone(),
         install: cli.install && !is_bundle,
         adb: cli.adb.clone(),
         selection,
@@ -402,6 +424,12 @@ fn real_main() -> Result<()> {
             architectures: package.release.architecture.clone(),
             min_sdk: package.release.min_sdk,
             file_type: Some(package.release.format.to_string()),
+            abi: package.release.abi,
+            upstream_source: package.release.source.clone(),
+            releases_api: (package.release.provider == "releases-api")
+                .then(|| source::RELEASES_API_URL.to_owned()),
+            source_verified: package.release.source_verified,
+            source_certificate_sha256: package.release.source_cert_sha256.clone(),
         },
         discord_embedded_aar: cli.discord_embedded_aar,
         discord_sdk_aar: cli.discord_sdk_aar,
@@ -491,6 +519,14 @@ fn real_main() -> Result<()> {
     println!("SHA-256 source: {}", result.source_sha256);
     println!("SHA-256 APK:    {}", result.output_sha256);
     println!("Сертификат:     {}", result.output_cert);
+    println!(
+        "Signing key:     {}",
+        if result.signing_key_created {
+            "created"
+        } else {
+            "reused"
+        }
+    );
     if let Some(renderer) = &result.patch.renderer {
         println!("Renderer:       {}", renderer.display());
     }

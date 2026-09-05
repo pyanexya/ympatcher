@@ -1,4 +1,5 @@
 use crate::process::run;
+use crate::source::Abi;
 use crate::tools::Toolchain;
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -30,6 +31,7 @@ pub fn inject(
     embedded_aar: &Path,
     discord_sdk_aar: &Path,
     tools: &Toolchain,
+    target_abi: Option<Abi>,
 ) -> Result<()> {
     if !embedded_aar.is_file() {
         bail!(
@@ -51,14 +53,27 @@ pub fn inject(
     extract_aar(embedded_aar, &embedded)?;
     extract_aar(discord_sdk_aar, &sdk)?;
     let embedded_classes = embedded.join("classes.jar");
-    let sdk_classes = sdk.join("libs/discord_partner_sdk.jar");
-    if !embedded_classes.is_file() || !sdk_classes.is_file() {
-        bail!("Discord AAR не содержит обязательные classes.jar");
+    let sdk_libs = sdk.join("libs");
+    let mut sdk_classes = fs::read_dir(&sdk_libs)
+        .with_context(|| format!("Discord AAR не содержит {}", sdk_libs.display()))?
+        .filter_map(|entry| entry.ok().map(|value| value.path()))
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jar"))
+        .collect::<Vec<_>>();
+    sdk_classes.sort();
+    if !embedded_classes.is_file()
+        || !sdk_classes.iter().any(|path| {
+            path.file_name().and_then(|value| value.to_str()) == Some("discord_partner_sdk.jar")
+        })
+        || !sdk_classes
+            .iter()
+            .any(|path| path.file_name().and_then(|value| value.to_str()) == Some("libwebrtc.jar"))
+    {
+        bail!("Discord AAR не содержит обязательные SDK и WebRTC classes");
     }
 
     let dex_output = temporary.path().join("dex");
     fs::create_dir_all(&dex_output)?;
-    let args: Vec<OsString> = vec![
+    let mut args: Vec<OsString> = vec![
         "-cp".into(),
         tools.r8.as_os_str().to_owned(),
         "com.android.tools.r8.D8".into(),
@@ -67,14 +82,14 @@ pub fn inject(
         "--output".into(),
         dex_output.as_os_str().to_owned(),
         embedded_classes.as_os_str().to_owned(),
-        sdk_classes.as_os_str().to_owned(),
     ];
+    args.extend(sdk_classes.iter().map(|path| path.as_os_str().to_owned()));
     run(&tools.java, args).context("D8 не смог собрать Discord RPC classes")?;
     let dex = dex_output.join("classes.dex");
     let dex_name = next_dex_name(decoded)?;
     fs::copy(&dex, decoded.join(dex_name))?;
 
-    copy_native_libraries(&embedded.join("jni"), &decoded.join("lib"))?;
+    copy_native_libraries(&embedded.join("jni"), &decoded.join("lib"), target_abi)?;
     merge_resources(decoded, &embedded)?;
     merge_manifest(decoded)?;
     hook_activity(decoded)?;
@@ -125,12 +140,18 @@ fn next_dex_name(decoded: &Path) -> Result<String> {
     Ok(format!("classes{}.dex", highest + 1))
 }
 
-fn copy_native_libraries(source: &Path, destination: &Path) -> Result<()> {
+fn copy_native_libraries(source: &Path, destination: &Path, target_abi: Option<Abi>) -> Result<()> {
     for entry in WalkDir::new(source).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
         }
         let relative = entry.path().strip_prefix(source)?;
+        if let Some(abi) = target_abi
+            && relative.components().next().map(|part| part.as_os_str())
+                != Some(abi.to_string().as_ref())
+        {
+            continue;
+        }
         let output = destination.join(relative);
         if output.exists() {
             let source_hash = crate::tools::sha256_file(entry.path())?;
@@ -260,14 +281,19 @@ fn find_one(decoded: &Path, suffix: &str) -> Result<PathBuf> {
 fn hook_activity(decoded: &Path) -> Result<()> {
     let path = find_one(decoded, "/ru/yandex/music/main/MainScreenActivity.smali")?;
     let text = fs::read_to_string(&path)?;
-    let anchor = "invoke-super {p0}, Lh3m;->onResume()V";
-    if !text.contains(anchor) {
+    let super_class = Regex::new(r"(?m)^\.super (L[^;]+;)\r?$")?
+        .captures(&text)
+        .and_then(|capture| capture.get(1))
+        .map(|value| value.as_str())
+        .context("Discord RPC: не найден superclass MainScreenActivity")?;
+    let anchor = format!("invoke-super {{p0}}, {super_class}->onResume()V");
+    if text.matches(&anchor).count() != 1 {
         bail!("Discord RPC: не найден MainScreenActivity.onResume fingerprint");
     }
     let replacement = format!(
         "{anchor}\n\n    # ympatcher:discord-rpc-activity:v0.5.0\n    invoke-static {{p0}}, Ldev/pyanexy/ympresence/EmbeddedPresence;->onActivity(Landroid/app/Activity;)V"
     );
-    fs::write(path, text.replacen(anchor, &replacement, 1))?;
+    fs::write(path, text.replacen(&anchor, &replacement, 1))?;
     Ok(())
 }
 
@@ -298,5 +324,29 @@ mod tests {
         fs::create_dir(directory.path().join("smali")).unwrap();
         fs::create_dir(directory.path().join("smali_classes6")).unwrap();
         assert_eq!(next_dex_name(directory.path()).unwrap(), "classes7.dex");
+    }
+
+    #[test]
+    fn copies_only_requested_native_abi() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        for abi in ["arm64-v8a", "armeabi-v7a"] {
+            let directory = source.path().join(abi);
+            fs::create_dir(&directory).unwrap();
+            fs::write(directory.join("libympresence.so"), abi).unwrap();
+        }
+        copy_native_libraries(source.path(), destination.path(), Some(Abi::ArmeabiV7a)).unwrap();
+        assert!(
+            destination
+                .path()
+                .join("armeabi-v7a/libympresence.so")
+                .is_file()
+        );
+        assert!(
+            !destination
+                .path()
+                .join("arm64-v8a/libympresence.so")
+                .exists()
+        );
     }
 }

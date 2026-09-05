@@ -3,14 +3,15 @@ use crate::signing::{ensure_signing_identity, sign_apk, verify_apk};
 use crate::tools::Toolchain;
 use crate::tools::sha256_file;
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::StatusCode;
+use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
 use ympatcher::discovery::http::CancellationToken;
@@ -19,7 +20,51 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 pub const PACKAGE_NAME: &str = "ru.yandex.music";
-pub const LATEST_API_URL: &str = "https://ympatcher.pyanexy.cc/v1/apks/latest";
+pub const RELEASES_API_URL: &str = "https://releases.pyanexy.cc";
+pub const OFFICIAL_CERTIFICATE_SHA256: &str =
+    "aca405ded8b25cb2e8c6da69425d2b4307d087c1276fc06ad5942731ccc51dba";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub enum Abi {
+    #[serde(rename = "arm64-v8a")]
+    Arm64V8a,
+    #[serde(rename = "armeabi-v7a")]
+    ArmeabiV7a,
+}
+
+impl Abi {
+    pub fn from_device_abi(value: &str) -> Result<Self> {
+        let values = value.split(',').map(str::trim).collect::<Vec<_>>();
+        if values.contains(&"arm64-v8a") {
+            return Ok(Self::Arm64V8a);
+        }
+        if values.contains(&"armeabi-v7a") {
+            return Ok(Self::ArmeabiV7a);
+        }
+        bail!("устройство сообщает неподдерживаемый ABI: {value}")
+    }
+}
+
+impl fmt::Display for Abi {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Arm64V8a => "arm64-v8a",
+            Self::ArmeabiV7a => "armeabi-v7a",
+        })
+    }
+}
+
+impl FromStr for Abi {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "arm64-v8a" => Ok(Self::Arm64V8a),
+            "armeabi-v7a" => Ok(Self::ArmeabiV7a),
+            _ => bail!("неподдерживаемый ABI {value}; выберите arm64-v8a или armeabi-v7a"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -68,6 +113,27 @@ pub struct Release {
     pub source_page: Option<String>,
     pub available: bool,
     pub opaque_id: String,
+    pub abi: Option<Abi>,
+    pub source: Option<String>,
+    pub artifact_signed: Option<bool>,
+    pub source_verified: Option<bool>,
+    pub source_cert_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SourceTrust {
+    OfficialSignedApk,
+    VerifiedNormalizedArtifact {
+        package_name: String,
+        channel: ReleaseChannel,
+        version_name: String,
+        version_code: u64,
+        abi: Abi,
+        artifact_size: u64,
+        artifact_sha256: String,
+        source_cert_sha256: String,
+    },
+    UserSuppliedUnknown,
 }
 
 #[derive(Debug, Clone)]
@@ -82,8 +148,8 @@ pub struct DownloadedFile {
 pub struct DownloadedPackage {
     pub release: Release,
     pub files: Vec<DownloadedFile>,
-    pub container_path: Option<PathBuf>,
     pub container_sha256: Option<String>,
+    pub trust: SourceTrust,
 }
 
 impl DownloadedPackage {
@@ -115,99 +181,75 @@ pub trait ReleaseProvider {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestApiEnvelope {
-    message: String,
-    data: LatestApiData,
-    #[serde(default)]
-    tech: LatestApiTech,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestApiData {
-    result_apks: Vec<LatestApiApk>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestApiTech {
-    request_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestApiApk {
-    id: String,
+struct ReleasesApiResponse {
+    package: String,
     channel: ReleaseChannel,
-    #[serde(default)]
-    labels: Vec<String>,
     version_name: String,
     version_code: u64,
-    release_date: Option<String>,
-    file_name: String,
-    file_type: String,
-    size_bytes: u64,
-    sha256: String,
-    #[serde(deserialize_with = "string_or_strings")]
-    architecture: Vec<String>,
-    #[serde(deserialize_with = "string_or_strings")]
-    dpi: Vec<String>,
-    min_android: Option<String>,
-    min_sdk: Option<u32>,
-    split_count: Option<u32>,
-    is_bundle: bool,
-    source_page: Option<String>,
-    download_url: String,
-    available: bool,
+    source: String,
+    artifacts: Vec<ReleasesApiArtifact>,
 }
 
-fn string_or_strings<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        One(String),
-        Many(Vec<String>),
-    }
-    Ok(match Value::deserialize(deserializer)? {
-        Value::One(value) => value
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        Value::Many(values) => values,
-    })
+#[derive(Debug, Deserialize)]
+struct ReleasesApiArtifact {
+    abi: Abi,
+    format: String,
+    kind: String,
+    size: u64,
+    sha256: String,
+    signed: bool,
+    source_verified: bool,
+    source_cert_sha256: String,
+    url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheMetadata {
+    api: String,
+    package_name: String,
+    channel: ReleaseChannel,
+    version_name: String,
+    version_code: u64,
+    abi: Abi,
+    size: u64,
+    sha256: String,
+    source: String,
+    source_verified: bool,
+    source_cert_sha256: String,
+    artifact_url: String,
 }
 
 #[derive(Clone)]
-pub struct YmpatcherApiProvider {
-    endpoint: String,
+pub struct ReleasesApiProvider {
+    base_url: String,
     client: Client,
     cancellation: CancellationToken,
     max_attempts: usize,
 }
 
-impl fmt::Debug for YmpatcherApiProvider {
+impl fmt::Debug for ReleasesApiProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("YmpatcherApiProvider")
-            .field("endpoint", &self.endpoint)
+            .debug_struct("ReleasesApiProvider")
+            .field("base_url", &self.base_url)
             .finish_non_exhaustive()
     }
 }
 
-impl YmpatcherApiProvider {
+impl ReleasesApiProvider {
     pub fn new(cancellation: CancellationToken) -> Result<Self> {
-        Self::with_endpoint(LATEST_API_URL, cancellation)
+        Self::with_endpoint(RELEASES_API_URL, cancellation)
     }
 
-    fn with_endpoint(endpoint: impl Into<String>, cancellation: CancellationToken) -> Result<Self> {
+    fn with_endpoint(base_url: impl Into<String>, cancellation: CancellationToken) -> Result<Self> {
+        let base_url = base_url.into().trim_end_matches('/').to_owned();
+        let parsed = reqwest::Url::parse(&base_url).context("невалидный releases API URL")?;
+        if parsed.scheme() != "https" && parsed.host_str() != Some("127.0.0.1") {
+            bail!("releases API должен использовать HTTPS");
+        }
         Ok(Self {
-            endpoint: endpoint.into(),
+            base_url,
             client: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(45))
@@ -219,241 +261,298 @@ impl YmpatcherApiProvider {
         })
     }
 
-    fn request_releases(&self) -> Result<Vec<LatestApiApk>> {
+    pub fn latest_for_abi(&self, channel: ReleaseChannel, abi: Abi) -> Result<Release> {
+        if !matches!(channel, ReleaseChannel::Stable | ReleaseChannel::Beta) {
+            bail!("releases API поддерживает только stable и beta");
+        }
+        let endpoint = format!("{}/v1/releases/{channel}/latest", self.base_url);
+        let response = self.request_json(&endpoint)?;
+        self.validate_release(response, channel, abi)
+    }
+
+    fn request_json(&self, endpoint: &str) -> Result<ReleasesApiResponse> {
         let mut last_error = None;
         for attempt in 1..=self.max_attempts {
-            if self.cancellation.is_cancelled() {
-                bail!("операция отменена пользователем");
-            }
-            let response = self
-                .client
-                .post(&self.endpoint)
-                .header(CONTENT_TYPE, "application/json")
-                .json(&serde_json::json!({"channels": ["stable", "beta"]}))
-                .send();
-            match response {
+            self.check_cancelled()?;
+            match self.client.get(endpoint).send() {
+                Ok(response) if response.status().is_success() => {
+                    return response.json().context("API metadata: невалидный JSON");
+                }
                 Ok(response) => {
                     let status = response.status();
-                    let bytes = response
-                        .bytes()
-                        .context("API: не удалось прочитать ответ")?;
-                    let parsed = serde_json::from_slice::<LatestApiEnvelope>(&bytes);
-                    if !status.is_success() {
-                        let details = parsed
-                            .ok()
-                            .map(|body| api_error(&body.message, body.tech.request_id.as_deref()))
-                            .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-                        if (status.is_server_error() || status.as_u16() == 429)
-                            && attempt < self.max_attempts
-                        {
-                            last_error = Some(anyhow::anyhow!(details));
-                            self.backoff(attempt)?;
-                            continue;
-                        }
-                        bail!("API latest: {details}");
+                    let retryable =
+                        status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+                    let message = format!("API metadata: HTTP {}", status.as_u16());
+                    if !retryable || attempt == self.max_attempts {
+                        bail!(message);
                     }
-                    let body = parsed.context("API latest вернул невалидный JSON")?;
-                    return Ok(body.data.result_apks);
+                    last_error = Some(anyhow::anyhow!(message));
                 }
                 Err(error) => {
                     let retryable = error.is_connect() || error.is_timeout() || error.is_request();
-                    last_error = Some(error.into());
                     if !retryable || attempt == self.max_attempts {
-                        break;
+                        return Err(error).context("API metadata: запрос не выполнен");
                     }
-                    self.backoff(attempt)?;
+                    last_error = Some(error.into());
                 }
             }
+            self.backoff(attempt)?;
         }
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("API latest недоступен")))
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("API metadata недоступен")))
+    }
+
+    fn validate_release(
+        &self,
+        response: ReleasesApiResponse,
+        requested_channel: ReleaseChannel,
+        abi: Abi,
+    ) -> Result<Release> {
+        if response.package != PACKAGE_NAME {
+            bail!(
+                "source provenance: ожидался package {PACKAGE_NAME}, получен {}",
+                response.package
+            );
+        }
+        if response.channel != requested_channel {
+            bail!(
+                "source provenance: API вернул канал {}, ожидался {requested_channel}",
+                response.channel
+            );
+        }
+        if response.source != "google-play" {
+            bail!(
+                "source provenance: ожидался google-play, получен {}",
+                response.source
+            );
+        }
+        let artifact = response
+            .artifacts
+            .into_iter()
+            .find(|artifact| artifact.abi == abi)
+            .with_context(|| {
+                format!("artifact ABI {abi} отсутствует для канала {requested_channel}")
+            })?;
+        if artifact.format != "apk" || artifact.kind != "standalone" {
+            bail!("source provenance: artifact должен быть standalone APK");
+        }
+        if !artifact.source_verified {
+            bail!("source provenance: API не подтвердил официальный источник");
+        }
+        if !artifact
+            .source_cert_sha256
+            .eq_ignore_ascii_case(OFFICIAL_CERTIFICATE_SHA256)
+        {
+            bail!("source provenance: неверный сертификат исходного Yandex APK");
+        }
+        if artifact.sha256.len() != 64
+            || !artifact
+                .sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            bail!("source provenance: невалидный SHA-256 artifact");
+        }
+        let url = self.validate_artifact_url(&artifact.url)?;
+        Ok(Release {
+            provider: "releases-api".to_owned(),
+            package_name: response.package,
+            version_name: Some(response.version_name),
+            version_code: Some(response.version_code),
+            channel: response.channel,
+            format: PackageFormat::MonolithicApk,
+            expected_size: Some(artifact.size),
+            expected_sha256: Some(artifact.sha256.to_ascii_lowercase()),
+            file_name: Some("source.apk".to_owned()),
+            download_url: Some(url),
+            release_date: None,
+            architecture: vec![abi.to_string()],
+            dpi: Vec::new(),
+            min_android: None,
+            min_sdk: None,
+            split_count: None,
+            source_page: Some(self.base_url.clone()),
+            available: true,
+            opaque_id: response.version_code.to_string(),
+            abi: Some(abi),
+            source: Some(response.source),
+            artifact_signed: Some(artifact.signed),
+            source_verified: Some(artifact.source_verified),
+            source_cert_sha256: Some(artifact.source_cert_sha256.to_ascii_lowercase()),
+        })
+    }
+
+    fn validate_artifact_url(&self, value: &str) -> Result<String> {
+        let base = reqwest::Url::parse(&format!("{}/", self.base_url))?;
+        let url = base
+            .join(value)
+            .context("source provenance: невалидный artifact URL")?;
+        if url.scheme() != "https" && url.host_str() != Some("127.0.0.1") {
+            bail!("artifact URL должен использовать HTTPS");
+        }
+        if url.host_str() != base.host_str()
+            || url.port_or_known_default() != base.port_or_known_default()
+        {
+            bail!("artifact URL указывает за пределы releases API");
+        }
+        Ok(url.into())
+    }
+
+    fn check_cancelled(&self) -> Result<()> {
+        if self.cancellation.is_cancelled() {
+            bail!("операция отменена пользователем");
+        }
+        Ok(())
     }
 
     fn backoff(&self, attempt: usize) -> Result<()> {
         for _ in 0..attempt * 5 {
-            if self.cancellation.is_cancelled() {
-                bail!("операция отменена пользователем");
-            }
+            self.check_cancelled()?;
             thread::sleep(Duration::from_millis(100));
         }
         Ok(())
     }
-}
 
-fn api_error(message: &str, request_id: Option<&str>) -> String {
-    match request_id {
-        Some(request_id) if !request_id.is_empty() => {
-            format!("{message} (requestId: {request_id})")
+    fn download_once(&self, url: &str, output: &Path, size: u64, sha256: &str) -> Result<()> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .context("download: запрос не выполнен")?;
+        if !response.status().is_success() {
+            bail!("download: HTTP {}", response.status().as_u16());
         }
-        _ => message.to_owned(),
+        stream_download(response, output, size, sha256, &self.cancellation)
     }
 }
 
-impl ReleaseProvider for YmpatcherApiProvider {
+impl ReleaseProvider for ReleasesApiProvider {
     fn id(&self) -> &'static str {
-        "ympatcher-api"
+        "releases-api"
     }
 
-    fn list_versions(&self, channel: ReleaseChannel) -> Result<Vec<Release>> {
-        let expected_label = match channel {
-            ReleaseChannel::Stable => "latest-stable",
-            ReleaseChannel::Beta => "latest-beta",
-            _ => bail!("latest API поддерживает только stable и beta"),
-        };
-        let releases = self
-            .request_releases()?
-            .into_iter()
-            .filter(|apk| apk.channel == channel)
-            .filter(|apk| apk.labels.iter().any(|label| label == expected_label))
-            .filter(|apk| apk.available)
-            .map(|apk| Release {
-                provider: self.id().to_owned(),
-                package_name: PACKAGE_NAME.to_owned(),
-                version_name: Some(apk.version_name),
-                version_code: Some(apk.version_code),
-                channel: apk.channel,
-                format: if apk.is_bundle || apk.file_type.eq_ignore_ascii_case("apkm") {
-                    PackageFormat::ApkmBundle
-                } else {
-                    PackageFormat::MonolithicApk
-                },
-                expected_size: Some(apk.size_bytes),
-                expected_sha256: Some(apk.sha256.to_ascii_lowercase()),
-                file_name: Some(apk.file_name),
-                download_url: Some(apk.download_url),
-                release_date: apk.release_date,
-                architecture: apk.architecture,
-                dpi: apk.dpi,
-                min_android: apk.min_android,
-                min_sdk: apk.min_sdk,
-                split_count: apk.split_count,
-                source_page: apk.source_page,
-                available: apk.available,
-                opaque_id: apk.id,
-            })
-            .collect::<Vec<_>>();
-        if releases.is_empty() {
-            bail!("API latest не вернул доступный {expected_label} release");
-        }
-        Ok(releases)
+    fn list_versions(&self, _channel: ReleaseChannel) -> Result<Vec<Release>> {
+        bail!("для releases API необходимо явно выбрать ABI")
     }
 
-    fn download(&self, release: &Release, destination: &Path) -> Result<DownloadedPackage> {
-        if release.provider != self.id() || !release.available {
-            bail!("release недоступен или принадлежит другому provider");
+    fn download(&self, release: &Release, cache_root: &Path) -> Result<DownloadedPackage> {
+        if release.provider != self.id() {
+            bail!("release принадлежит другому provider");
         }
-        let url = release
-            .download_url
-            .as_deref()
-            .context("API release не содержит downloadUrl")?;
+        let version_code = release
+            .version_code
+            .context("API release не содержит versionCode")?;
+        let version_name = release
+            .version_name
+            .clone()
+            .context("API release не содержит versionName")?;
+        let abi = release.abi.context("API release не содержит ABI")?;
         let expected_size = release
             .expected_size
-            .context("API release не содержит sizeBytes")?;
+            .context("API release не содержит size")?;
         let expected_sha = release
             .expected_sha256
             .as_deref()
             .context("API release не содержит sha256")?;
-        fs::create_dir_all(destination)?;
-        let file_name = release
-            .file_name
+        let url = release
+            .download_url
             .as_deref()
-            .context("API release не содержит fileName")?;
-        crate::apk::validate_zip_path(file_name)?;
-        if file_name.contains('/') {
-            bail!("API fileName должен быть простым именем файла");
-        }
-        let output = destination.join(file_name);
+            .context("API release не содержит artifact URL")?;
+        let directory = cache_root
+            .join("releases")
+            .join(release.channel.to_string())
+            .join(version_code.to_string())
+            .join(abi.to_string());
+        fs::create_dir_all(&directory)?;
+        let output = directory.join("source.apk");
+        let metadata_path = directory.join("metadata.json");
         if output.is_file() && verify_download(&output, expected_size, expected_sha).is_ok() {
             eprintln!("  кэш: размер и SHA-256 подтверждены");
-            return normalize_downloaded_release(&output, destination, release, expected_sha);
+            return downloaded_api_package(release, output);
         }
-        let temporary = output.with_extension("download.part");
+        let temporary = directory.join("source.apk.part");
         let mut last_error = None;
         for attempt in 1..=self.max_attempts {
-            let result = download_once(
-                &self.client,
-                url,
-                &temporary,
-                expected_size,
-                expected_sha,
-                &self.cancellation,
-            );
-            match result {
+            self.check_cancelled()?;
+            match self.download_once(url, &temporary, expected_size, expected_sha) {
                 Ok(()) => {
                     if output.exists() {
                         fs::remove_file(&output)?;
                     }
                     fs::rename(&temporary, &output)?;
-                    return normalize_downloaded_release(
-                        &output,
-                        destination,
-                        release,
-                        expected_sha,
-                    );
+                    let metadata = CacheMetadata {
+                        api: self.base_url.clone(),
+                        package_name: release.package_name.clone(),
+                        channel: release.channel,
+                        version_name: version_name.clone(),
+                        version_code,
+                        abi,
+                        size: expected_size,
+                        sha256: expected_sha.to_owned(),
+                        source: release.source.clone().unwrap_or_default(),
+                        source_verified: release.source_verified.unwrap_or(false),
+                        source_cert_sha256: release.source_cert_sha256.clone().unwrap_or_default(),
+                        artifact_url: url.to_owned(),
+                    };
+                    let metadata_part = directory.join("metadata.json.part");
+                    fs::write(&metadata_part, serde_json::to_vec_pretty(&metadata)?)?;
+                    if metadata_path.exists() {
+                        fs::remove_file(&metadata_path)?;
+                    }
+                    fs::rename(metadata_part, metadata_path)?;
+                    return downloaded_api_package(release, output);
                 }
                 Err(error) => {
+                    let message = error.to_string();
+                    let retryable = message.contains("HTTP 429")
+                        || message.contains("HTTP 5")
+                        || message.contains("timeout")
+                        || message.contains("connect")
+                        || message.contains("запрос не выполнен");
                     let _ = fs::remove_file(&temporary);
-                    last_error = Some(error);
-                    if attempt < self.max_attempts {
-                        self.backoff(attempt)?;
+                    if !retryable || attempt == self.max_attempts {
+                        return Err(error).context("download: artifact не получен");
                     }
+                    last_error = Some(error);
+                    self.backoff(attempt)?;
                 }
             }
         }
-        Err(last_error.context("скачивание latest release не удалось")?)
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("download: artifact недоступен")))
     }
 }
 
-fn normalize_downloaded_release(
-    output: &Path,
-    destination: &Path,
-    release: &Release,
-    expected_sha: &str,
-) -> Result<DownloadedPackage> {
-    if release.opaque_id.is_empty()
-        || !release
-            .opaque_id
-            .chars()
-            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '_' | '-'))
-    {
-        bail!("API release id содержит небезопасные символы");
-    }
-    let extracted = destination.join(format!("{}-splits", release.opaque_id));
-    if extracted.exists() {
-        fs::remove_dir_all(&extracted)?;
-    }
-    fs::create_dir_all(&extracted)?;
-    let mut package = match release.format {
-        PackageFormat::ApkmBundle | PackageFormat::SplitApks => {
-            import_split_archive(output, &extracted, release.clone())?
-        }
-        PackageFormat::MonolithicApk => DownloadedPackage {
-            release: release.clone(),
-            files: vec![describe_file(output.to_owned(), PackageFileRole::Base)?],
-            container_path: Some(output.to_owned()),
-            container_sha256: Some(expected_sha.to_owned()),
-        },
+fn downloaded_api_package(release: &Release, output: PathBuf) -> Result<DownloadedPackage> {
+    let trust = SourceTrust::VerifiedNormalizedArtifact {
+        package_name: release.package_name.clone(),
+        channel: release.channel,
+        version_name: release.version_name.clone().context("нет versionName")?,
+        version_code: release.version_code.context("нет versionCode")?,
+        abi: release.abi.context("нет ABI")?,
+        artifact_size: release.expected_size.context("нет size")?,
+        artifact_sha256: release.expected_sha256.clone().context("нет sha256")?,
+        source_cert_sha256: release
+            .source_cert_sha256
+            .clone()
+            .context("нет source cert")?,
     };
-    package.container_path = Some(output.to_owned());
-    package.container_sha256 = Some(expected_sha.to_owned());
-    Ok(package)
+    Ok(DownloadedPackage {
+        release: release.clone(),
+        files: vec![describe_file(output.clone(), PackageFileRole::Base)?],
+        container_sha256: release.expected_sha256.clone(),
+        trust,
+    })
 }
 
-fn download_once(
-    client: &Client,
-    url: &str,
+fn stream_download(
+    mut response: Response,
     output: &Path,
     expected_size: u64,
     expected_sha: &str,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut response = client.get(url).send().context("ошибка скачивания")?;
-    if !response.status().is_success() {
-        bail!("downloadUrl вернул HTTP {}", response.status().as_u16());
-    }
     let mut writer = File::create(output)?;
     let mut buffer = [0_u8; 128 * 1024];
     let mut received = 0_u64;
-    let mut next_report = 5_u64;
     loop {
         if cancellation.is_cancelled() {
             bail!("загрузка отменена пользователем");
@@ -465,15 +564,7 @@ fn download_once(
         writer.write_all(&buffer[..count])?;
         received += count as u64;
         if received > expected_size {
-            bail!("загрузка превысила заявленный размер {expected_size}");
-        }
-        let percent = received
-            .saturating_mul(100)
-            .checked_div(expected_size)
-            .unwrap_or(100);
-        if percent >= next_report {
-            eprintln!("  загрузка: {percent}% ({received}/{expected_size} bytes)");
-            next_report = (percent / 5 + 1) * 5;
+            bail!("размер загрузки превышает ожидаемые {expected_size} bytes");
         }
     }
     writer.flush()?;
@@ -555,6 +646,11 @@ impl ReleaseProvider for UserImportProvider {
             source_page: None,
             available: true,
             opaque_id: self.input.display().to_string(),
+            abi: None,
+            source: None,
+            artifact_signed: None,
+            source_verified: None,
+            source_cert_sha256: None,
         }])
     }
 
@@ -574,8 +670,8 @@ impl ReleaseProvider for UserImportProvider {
                 let package = DownloadedPackage {
                     release: release.clone(),
                     files: vec![describe_file(output, PackageFileRole::Base)?],
-                    container_path: None,
                     container_sha256: None,
+                    trust: SourceTrust::OfficialSignedApk,
                 };
                 if package.files[0].size != release.expected_size.unwrap_or(package.files[0].size) {
                     bail!("размер импортированного APK изменился во время копирования");
@@ -667,8 +763,8 @@ pub fn import_split_archive(
     let package = DownloadedPackage {
         release,
         files,
-        container_path: Some(input.to_owned()),
         container_sha256: Some(sha256_file(input)?),
+        trust: SourceTrust::OfficialSignedApk,
     };
     package.base_apk()?;
     Ok(package)
@@ -759,176 +855,207 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 
-    fn api_json(stable_available: bool) -> String {
+    const SHA_ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn release_json(channel: &str, abi: &str) -> String {
         format!(
-            r#"{{"message":"ok","data":{{"resultApks":[{{"id":"s","channel":"stable","labels":["latest","latest-stable"],"versionName":"2026.08.4 #162.1gpr","versionCode":24026442,"releaseDate":"2026-09-02","fileName":"stable.apkm","fileType":"apkm","sizeBytes":3,"sha256":"abc","architecture":["arm64-v8a"],"dpi":["480"],"minAndroid":"7.0","minSdk":24,"splitCount":9,"isBundle":true,"sourcePage":"https://example.test/stable","downloadUrl":"https://example.test/stable.apkm","available":{stable_available}}},{{"id":"b","channel":"beta","labels":["latest","latest-beta"],"versionName":"beta","versionCode":2,"releaseDate":null,"fileName":"beta.apkm","fileType":"apkm","sizeBytes":4,"sha256":"def","architecture":"arm64-v8a","dpi":"480","minAndroid":"7.0","minSdk":24,"splitCount":4,"isBundle":true,"sourcePage":null,"downloadUrl":"https://example.test/beta.apkm","available":true}}]}},"tech":{{"requestId":"req-ok"}}}}"#
+            r#"{{"package":"{PACKAGE_NAME}","channel":"{channel}","version_name":"2026.09.1 #163gpr","version_code":24026461,"source":"google-play","artifacts":[{{"abi":"{abi}","format":"apk","kind":"standalone","size":3,"sha256":"{SHA_ABC}","signed":false,"source_verified":true,"source_cert_sha256":"{OFFICIAL_CERTIFICATE_SHA256}","url":"/artifact"}}]}}"#
         )
     }
 
-    fn serve(status: u16, body: String, requests: usize) -> String {
+    fn serve(responses: Vec<(u16, String)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            for stream in listener.incoming().take(requests) {
+            for (stream, (status, body)) in listener.incoming().zip(responses) {
                 let mut stream = stream.unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut content_length = 0_usize;
                 loop {
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
                     if line == "\r\n" || line.is_empty() {
                         break;
                     }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        content_length = value.trim().parse().unwrap();
-                    }
                 }
-                let mut request_body = vec![0; content_length];
-                reader.read_exact(&mut request_body).unwrap();
-                assert!(String::from_utf8(request_body).unwrap().contains("stable"));
                 write!(
                     stream,
-                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
                     body
                 )
                 .unwrap();
             }
         });
-        format!("http://{address}/v1/apks/latest")
+        format!("http://{address}")
     }
 
-    struct FakeProvider;
+    fn serve_delayed(body: String, delay: Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                thread::sleep(delay);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+        format!("http://{address}")
+    }
 
-    impl ReleaseProvider for FakeProvider {
-        fn id(&self) -> &'static str {
-            "fake"
-        }
-
-        fn list_versions(&self, channel: ReleaseChannel) -> Result<Vec<Release>> {
-            Ok([1_u64, 3, 2]
-                .into_iter()
-                .map(|version| Release {
-                    provider: self.id().to_owned(),
-                    package_name: PACKAGE_NAME.to_owned(),
-                    version_name: Some(version.to_string()),
-                    version_code: Some(version),
-                    channel,
-                    format: PackageFormat::MonolithicApk,
-                    expected_size: None,
-                    expected_sha256: None,
-                    file_name: None,
-                    download_url: None,
-                    release_date: None,
-                    architecture: Vec::new(),
-                    dpi: Vec::new(),
-                    min_android: None,
-                    min_sdk: None,
-                    split_count: None,
-                    source_page: None,
-                    available: true,
-                    opaque_id: version.to_string(),
-                })
-                .collect())
-        }
-
-        fn download(&self, _release: &Release, _destination: &Path) -> Result<DownloadedPackage> {
-            unreachable!()
+    #[test]
+    fn selects_stable_beta_and_both_abis() {
+        for (channel, abi) in [
+            (ReleaseChannel::Stable, Abi::Arm64V8a),
+            (ReleaseChannel::Beta, Abi::ArmeabiV7a),
+        ] {
+            let endpoint = serve(vec![(
+                200,
+                release_json(&channel.to_string(), &abi.to_string()),
+            )]);
+            let provider =
+                ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+            let release = provider.latest_for_abi(channel, abi).unwrap();
+            assert_eq!(release.abi, Some(abi));
+            assert_eq!(release.format, PackageFormat::MonolithicApk);
         }
     }
 
     #[test]
-    fn provider_default_latest_uses_version_code() {
-        let release = FakeProvider.latest(ReleaseChannel::Beta).unwrap();
-        assert_eq!(release.version_code, Some(3));
-        assert_eq!(release.channel, ReleaseChannel::Beta);
+    fn rejects_missing_artifact_and_bad_provenance() {
+        let valid = release_json("stable", "arm64-v8a");
+        let cases = [
+            release_json("stable", "armeabi-v7a"),
+            valid.replace(PACKAGE_NAME, "evil.package"),
+            release_json("beta", "arm64-v8a"),
+            valid.replace("\"source_verified\":true", "\"source_verified\":false"),
+            valid.replace(OFFICIAL_CERTIFICATE_SHA256, &"0".repeat(64)),
+        ];
+        for body in cases {
+            let endpoint = serve(vec![(200, body)]);
+            let provider =
+                ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+            assert!(
+                provider
+                    .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
-    fn parses_api_and_selects_stable_and_beta_by_channel_and_label() {
-        let endpoint = serve(200, api_json(true), 2);
-        let provider =
-            YmpatcherApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
-        let stable = provider.latest(ReleaseChannel::Stable).unwrap();
-        let beta = provider.latest(ReleaseChannel::Beta).unwrap();
-        assert_eq!(stable.version_code, Some(24_026_442));
-        assert_eq!(stable.format, PackageFormat::ApkmBundle);
-        assert_eq!(beta.version_name.as_deref(), Some("beta"));
-    }
-
-    #[test]
-    fn rejects_invalid_json_and_http_errors_with_request_id() {
-        let endpoint = serve(200, "not-json".to_owned(), 1);
-        let provider =
-            YmpatcherApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
-        assert!(
-            provider
-                .latest(ReleaseChannel::Stable)
-                .unwrap_err()
-                .to_string()
-                .contains("JSON")
-        );
-
-        let body = r#"{"message":"release unavailable","data":{"resultApks":[]},"tech":{"requestId":"req-42"}}"#;
-        let endpoint = serve(404, body.to_owned(), 1);
-        let provider =
-            YmpatcherApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
-        let error = provider
-            .latest(ReleaseChannel::Stable)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("release unavailable"));
-        assert!(error.contains("req-42"));
-    }
-
-    #[test]
-    fn retries_server_errors_and_rejects_unavailable_release() {
-        let body =
-            r#"{"message":"temporary","data":{"resultApks":[]},"tech":{"requestId":"req-500"}}"#;
-        let endpoint = serve(500, body.to_owned(), 3);
-        let provider =
-            YmpatcherApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
-        assert!(
-            provider
-                .latest(ReleaseChannel::Stable)
-                .unwrap_err()
-                .to_string()
-                .contains("req-500")
-        );
-
-        let endpoint = serve(200, api_json(false), 1);
-        let provider =
-            YmpatcherApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
-        assert!(
-            provider
-                .latest(ReleaseChannel::Stable)
-                .unwrap_err()
-                .to_string()
-                .contains("не вернул")
-        );
+    fn handles_http_json_and_retry() {
+        for (status, body) in [(404, "{}"), (200, "not-json")] {
+            let endpoint = serve(vec![(status, body.to_owned())]);
+            let provider =
+                ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+            assert!(
+                provider
+                    .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
+                    .is_err()
+            );
+        }
+        for status in [429, 500] {
+            let endpoint = serve(vec![
+                (status, "{}".into()),
+                (status, "{}".into()),
+                (200, release_json("stable", "arm64-v8a")),
+            ]);
+            let provider =
+                ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+            assert!(
+                provider
+                    .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
+                    .is_ok()
+            );
+        }
     }
 
     #[test]
     fn verifies_size_and_sha256() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("download.apkm");
+        let path = directory.path().join("source.apk");
         fs::write(&path, b"abc").unwrap();
-        let sha = sha256_file(&path).unwrap();
-        verify_download(&path, 3, &sha).unwrap();
-        assert!(
-            verify_download(&path, 4, &sha)
-                .unwrap_err()
-                .to_string()
-                .contains("размер")
+        verify_download(&path, 3, SHA_ABC).unwrap();
+        assert!(verify_download(&path, 4, SHA_ABC).is_err());
+        assert!(verify_download(&path, 3, &"0".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn download_rejects_wrong_size_and_sha() {
+        for metadata in [
+            release_json("stable", "arm64-v8a").replace("\"size\":3", "\"size\":4"),
+            release_json("stable", "arm64-v8a").replace(SHA_ABC, &"0".repeat(64)),
+        ] {
+            let endpoint = serve(vec![(200, metadata), (200, "abc".to_owned())]);
+            let provider =
+                ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+            let release = provider
+                .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
+                .unwrap();
+            let cache = tempfile::tempdir().unwrap();
+            assert!(provider.download(&release, cache.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn valid_cache_hit_does_not_redownload() {
+        let endpoint = serve(vec![(200, release_json("stable", "arm64-v8a"))]);
+        let provider =
+            ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+        let release = provider
+            .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
+            .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let directory = cache.path().join("releases/stable/24026461/arm64-v8a");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("source.apk"), b"abc").unwrap();
+        let package = provider.download(&release, cache.path()).unwrap();
+        assert_eq!(package.files[0].sha256, SHA_ABC);
+    }
+
+    #[test]
+    fn metadata_timeout_is_reported() {
+        let endpoint = serve_delayed(
+            release_json("stable", "arm64-v8a"),
+            Duration::from_millis(250),
         );
+        let mut provider =
+            ReleasesApiProvider::with_endpoint(endpoint, CancellationToken::default()).unwrap();
+        provider.client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        provider.max_attempts = 1;
         assert!(
-            verify_download(&path, 3, &"0".repeat(64))
+            provider
+                .latest_for_abi(ReleaseChannel::Stable, Abi::Arm64V8a)
                 .unwrap_err()
                 .to_string()
-                .contains("SHA-256")
+                .contains("API metadata")
         );
     }
 
+    #[test]
+    fn live_releases_api_is_opt_in() {
+        if std::env::var_os("YMPATCHER_LIVE_TESTS").is_none() {
+            return;
+        }
+        let provider = ReleasesApiProvider::new(CancellationToken::default()).unwrap();
+        for channel in [ReleaseChannel::Stable, ReleaseChannel::Beta] {
+            for abi in [Abi::Arm64V8a, Abi::ArmeabiV7a] {
+                let release = provider.latest_for_abi(channel, abi).unwrap();
+                assert_eq!(release.package_name, PACKAGE_NAME);
+                assert_eq!(release.channel, channel);
+                assert_eq!(release.abi, Some(abi));
+                assert_eq!(release.source.as_deref(), Some("google-play"));
+                assert_eq!(release.source_verified, Some(true));
+            }
+        }
+    }
     fn test_release() -> Release {
         Release {
             provider: "test".to_owned(),
@@ -950,6 +1077,11 @@ mod tests {
             source_page: None,
             available: true,
             opaque_id: "test".to_owned(),
+            abi: None,
+            source: None,
+            artifact_signed: None,
+            source_verified: None,
+            source_cert_sha256: None,
         }
     }
 
@@ -1023,35 +1155,6 @@ mod tests {
             let result =
                 import_split_archive(&bundle, &directory.path().join(name), test_release());
             assert_eq!(result.is_ok(), valid, "{name}: {result:?}");
-        }
-    }
-
-    #[test]
-    fn api_filename_cannot_escape_download_directory() {
-        let directory = tempfile::tempdir().unwrap();
-        let provider =
-            YmpatcherApiProvider::with_endpoint("http://127.0.0.1:1", CancellationToken::default())
-                .unwrap();
-        let mut release = test_release();
-        release.provider = provider.id().to_owned();
-        release.download_url = Some("http://127.0.0.1:1/download".to_owned());
-        release.expected_size = Some(3);
-        release.expected_sha256 = Some("0".repeat(64));
-        for name in [
-            "../escape.apk",
-            "C:/escape.apk",
-            "sub/escape.apk",
-            "sub\\escape.apk",
-        ] {
-            release.file_name = Some(name.to_owned());
-            let error = provider
-                .download(&release, directory.path())
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("небезопасный") || error.contains("простым"),
-                "{error}"
-            );
         }
     }
 }

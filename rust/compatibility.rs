@@ -1,5 +1,5 @@
 use crate::channel::ReleaseChannel;
-use crate::source::PackageFormat;
+use crate::source::{Abi, PackageFormat};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -24,14 +24,9 @@ struct CompatibleRelease {
     version_name: String,
     version_code: u64,
     channel: ReleaseChannel,
-    source: String,
-    source_sha256: String,
-    official_certificate_sha256: String,
-    architectures: Vec<String>,
-    package_format: PackageFormat,
+    supported_abis: Vec<Abi>,
     compatibility_status: String,
     patcher_version: Option<String>,
-    discovered_at: String,
     verified_at: Option<String>,
     incompatible_reason: Option<String>,
 }
@@ -62,7 +57,7 @@ fn parse_manifest(channel: ReleaseChannel) -> Result<CompatibilityManifest> {
 }
 
 fn validate_manifest(manifest: &CompatibilityManifest) -> Result<()> {
-    if manifest.schema_version != 2 {
+    if manifest.schema_version != 3 {
         bail!("неподдерживаемая схема compatibility manifest");
     }
     if manifest.package_name != "ru.yandex.music" {
@@ -83,12 +78,7 @@ fn validate_manifest(manifest: &CompatibilityManifest) -> Result<()> {
         if !version_codes.insert(release.version_code) {
             bail!("повторяется versionCode {}", release.version_code);
         }
-        if release.source.trim().is_empty()
-            || release.source_sha256.len() != 64
-            || release.official_certificate_sha256 != OFFICIAL_CERTIFICATE_SHA256
-            || release.architectures.is_empty()
-            || release.discovered_at.trim().is_empty()
-        {
+        if release.supported_abis.is_empty() {
             bail!("неполная compatibility entry для {}", release.version_name);
         }
         if release.compatibility_status == "supported"
@@ -112,7 +102,7 @@ pub fn check(
     package_name: &str,
     version_name: &str,
     version_code: &str,
-    source_sha256: &str,
+    abi: Option<Abi>,
     allow_untested: bool,
 ) -> Result<CompatibilityReport> {
     let manifest = parse_manifest(channel)?;
@@ -165,12 +155,10 @@ pub fn check(
             release.version_name
         );
     }
-    if release.source_sha256 != source_sha256 {
-        bail!(
-            "SHA-256 APK не совпала с {} build {}",
-            release.source,
-            release.version_name
-        );
+    if let Some(abi) = abi
+        && !release.supported_abis.contains(&abi)
+    {
+        bail!("версия {} не проверена для ABI {abi}", release.version_name);
     }
     if release.compatibility_status != "supported" && !allow_untested {
         let reason = release
@@ -189,8 +177,12 @@ pub fn check(
         status: release.compatibility_status.clone(),
         tested_patch_version: release.patcher_version.clone(),
         channel: release.channel,
-        package_format: release.package_format,
-        architectures: release.architectures.clone(),
+        package_format: PackageFormat::MonolithicApk,
+        architectures: release
+            .supported_abis
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     })
 }
 
@@ -205,7 +197,7 @@ mod tests {
         assert_eq!(stable.lane, "stable");
         assert_eq!(stable.releases.len(), 3);
         assert_eq!(dev.lane, "dev");
-        assert!(dev.releases.is_empty());
+        assert_eq!(dev.releases.len(), 1);
     }
 
     #[test]
@@ -215,7 +207,7 @@ mod tests {
             "ru.yandex.music",
             "2026.08.3 #161rur",
             "24026431",
-            "286f6cea9643182d3c47d6a63e1e1f8229450fde6f7011148fccdc0cb68e5ca2",
+            None,
             false,
         )
         .unwrap();
@@ -231,7 +223,7 @@ mod tests {
             "ru.yandex.music",
             "2026.08.3 #161rur",
             "24026431",
-            "286f6cea9643182d3c47d6a63e1e1f8229450fde6f7011148fccdc0cb68e5ca2",
+            None,
             false,
         )
         .unwrap_err()
