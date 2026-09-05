@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ymp_presence_title">Discord Presence</string>
-    <string name="ymp_presence_summary">Current track in Discord without an account token</string>
+    <string name="ymp_presence_summary">Included in this build and disabled by default. Enable it below to show the current track in Discord without an account token.</string>
     <string name="ymp_presence_enable">Enable Presence</string>
     <string name="ymp_presence_activity_type">Activity type</string>
     <string name="ymp_presence_display">Display and privacy</string>

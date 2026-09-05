@@ -11,7 +11,7 @@
     <string name="danger_about_experiments_title" translatable="true">Developer experiments</string>
     <string name="danger_about_experiments_subtitle" translatable="true">Search and override mobile flags</string>
     <string name="danger_presence_title" translatable="true">Discord Rich Presence</string>
-    <string name="danger_presence_subtitle" translatable="true">Track status, artwork and privacy</string>
+    <string name="danger_presence_subtitle" translatable="true">Included · off by default · track display and privacy</string>
     <string name="danger_dev_title" translatable="true">Developer experiments</string>
     <string name="danger_experiment_count_suffix" translatable="true">\u0020experiments · swipe the title to close</string>
     <string name="danger_force_all_server" translatable="true">Force all · From server</string>

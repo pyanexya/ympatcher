@@ -10,7 +10,7 @@
     <string name="danger_about_experiments_title">Эксперименты для разработчиков</string>
     <string name="danger_about_experiments_subtitle">Поиск и настройка мобильных флагов</string>
     <string name="danger_presence_title">Discord Rich Presence</string>
-    <string name="danger_presence_subtitle">Статус трека, обложка и приватность</string>
+    <string name="danger_presence_subtitle">Встроено · выключено по умолчанию · отображение и приватность</string>
     <string name="danger_dev_title">Эксперименты для разработчиков</string>
     <string name="danger_experiment_count_suffix">\u0020экспериментов · потяните заголовок вниз, чтобы закрыть</string>
     <string name="danger_force_all_server">Форсировать все · С сервера</string>

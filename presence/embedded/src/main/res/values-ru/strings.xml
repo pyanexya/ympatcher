@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="ymp_presence_summary">Текущий трек в Discord без токена аккаунта</string>
+    <string name="ymp_presence_summary">Функция встроена в эту сборку и выключена по умолчанию. Включите её ниже, чтобы показывать текущий трек в Discord без токена аккаунта.</string>
     <string name="ymp_presence_enable">Включить Presence</string>
     <string name="ymp_presence_activity_type">Тип активности</string>
     <string name="ymp_presence_display">Отображение и приватность</string>
