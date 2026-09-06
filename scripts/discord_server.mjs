@@ -8,18 +8,20 @@ const APPLICATION_ID = process.env.DISCORD_APPLICATION_ID?.trim() || '1522963615
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY?.trim() || 'pyanexya/ympatcher'
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN?.trim()
 const command = process.argv[2] || 'bootstrap'
+const userAgent = 'DiscordBot (https://github.com/pyanexya/ympatcher, 1.0)'
 
+if (!['bootstrap', 'test', 'verify'].includes(command)) fail('Use bootstrap, test, or verify')
 if (!BOT_TOKEN) fail('DISCORD_BOT_TOKEN is required')
 if (!/^\d{17,20}$/.test(GUILD_ID)) fail('DISCORD_GUILD_ID must be a Discord snowflake')
 if (!/^[\w.-]+\/[\w.-]+$/.test(GITHUB_REPOSITORY)) fail('GITHUB_REPOSITORY must be owner/repo')
 
 const READ_ONLY_DENY = '2048'
 const VIEW_CHANNEL_ALLOW = '1024'
-const managedFooter = 'YM Patcher • managed setup'
+const managedFooter = 'YM Patcher'
 
 const layout = [
   {
-    name: '━━ ИНФОРМАЦИЯ ━━',
+    name: 'Информация',
     channels: [
       { name: 'добро-пожаловать', topic: 'Начните здесь: сайт, GitHub и Discord YM Patcher.', readOnly: true },
       { name: 'правила', topic: 'Короткие правила сообщества YM Patcher.', readOnly: true },
@@ -28,7 +30,7 @@ const layout = [
     ],
   },
   {
-    name: '━━ СООБЩЕСТВО ━━',
+    name: 'Сообщество',
     channels: [
       { name: 'общение', topic: 'Общее общение участников YM Patcher.' },
       { name: 'помощь', topic: 'Помощь с установкой, обновлением и настройкой патча.', slowmode: 5 },
@@ -37,7 +39,7 @@ const layout = [
     ],
   },
   {
-    name: '━━ РАЗРАБОТКА ━━',
+    name: 'Разработка',
     channels: [
       { name: 'beta-тестирование', topic: 'Обсуждение Beta-сборок и раннее тестирование.' },
       { name: 'разработка', topic: 'Техническое обсуждение ympatcher и вклад в проект.' },
@@ -45,7 +47,7 @@ const layout = [
     ],
   },
   {
-    name: '━━ ГОЛОСОВЫЕ ━━',
+    name: 'Голосовые',
     channels: [
       { name: 'Музыка', type: 2 },
       { name: 'Разговорная', type: 2 },
@@ -57,19 +59,29 @@ const me = await discord('/users/@me')
 if (me.id !== APPLICATION_ID) {
   fail(`The token belongs to bot ${me.id}, expected the YM Patcher application bot ${APPLICATION_ID}`)
 }
+if (!me.bot) fail('A Discord bot token is required')
 const guild = await discord(`/guilds/${GUILD_ID}`)
 const channels = await discord(`/guilds/${GUILD_ID}/channels`)
 const managed = new Map()
+const positions = []
 
-for (const section of layout) {
-  const category = await ensureCategory(section.name)
-  for (const definition of section.channels) {
-    const channel = await ensureChannel(category, definition)
+for (const [categoryPosition, section] of layout.entries()) {
+  const category = command === 'bootstrap' ? await ensureCategory(section.name) : channels.find((item) => item.type === 4 && item.name === section.name)
+  if (!category) fail(`Missing category: ${section.name}`)
+  positions.push({ id: category.id, position: categoryPosition })
+  for (const [position, definition] of section.channels.entries()) {
+    const channel = command === 'bootstrap' ? await ensureChannel(category, definition) : channels.find((item) => item.parent_id === category.id && item.name === definition.name)
+    if (!channel) fail(`Missing channel: ${definition.name}`)
     managed.set(definition.name, channel)
+    positions.push({ id: channel.id, position })
   }
 }
 
-await ensureInformationPosts()
+if (command === 'bootstrap') {
+  await discord(`/guilds/${GUILD_ID}/channels`, { method: 'PATCH', body: positions, empty: true })
+  await discord(`/guilds/${GUILD_ID}/members/@me`, { method: 'PATCH', body: { nick: 'YM Patcher' } })
+  await ensureInformationPosts()
+}
 
 const githubChannel = requiredChannel('github')
 const releasesChannel = requiredChannel('релизы')
@@ -84,6 +96,8 @@ if (command === 'bootstrap') {
     console.log('Discord configured. Set GITHUB_TOKEN to configure repository webhooks.')
   }
   console.log(`Discord server configured: ${guild.name} (${GUILD_ID})`)
+} else if (command === 'verify') {
+  console.log(JSON.stringify({ guild: guild.name, categories: layout.length, channels: managed.size, webhooks: [githubWebhook.id, releasesWebhook.id] }))
 } else if (command === 'test') {
   await executeWebhook(githubWebhook, {
     username: 'YM Patcher • GitHub',
@@ -98,12 +112,19 @@ if (command === 'bootstrap') {
   })
   console.log('Test notification sent.')
 } else {
-  fail(`Unknown command: ${command}. Use bootstrap or test.`)
+  fail(`Unknown command: ${command}`)
 }
 
 async function ensureCategory(name) {
   const existing = channels.find((channel) => channel.type === 4 && channel.name === name)
   if (existing) return existing
+  const originalName = { 'Сообщество': 'Text Channels', 'Голосовые': 'Voice Channels' }[name]
+  const original = channels.find((channel) => channel.type === 4 && channel.name === originalName)
+  if (original) {
+    const updated = await discord(`/channels/${original.id}`, { method: 'PATCH', body: { name } })
+    Object.assign(original, updated)
+    return original
+  }
   const created = await discord(`/guilds/${GUILD_ID}/channels`, {
     method: 'POST',
     body: { name, type: 4 },
@@ -115,6 +136,14 @@ async function ensureCategory(name) {
 async function ensureChannel(category, definition) {
   const type = definition.type ?? 0
   let channel = channels.find((item) => item.type === type && item.name === definition.name && item.parent_id === category.id)
+  const originalName = { 'общение': 'general', 'Разговорная': 'General' }[definition.name]
+  if (!channel && originalName) {
+    const original = channels.find((item) => item.type === type && item.name === originalName)
+    if (original) {
+      channel = await discord(`/channels/${original.id}`, { method: 'PATCH', body: { name: definition.name, parent_id: category.id } })
+      Object.assign(original, channel)
+    }
+  }
   if (!channel) {
     channel = await discord(`/guilds/${GUILD_ID}/channels`, {
       method: 'POST',
@@ -135,9 +164,15 @@ async function ensureChannel(category, definition) {
   }
 
   if (type === 0 && definition.readOnly) {
+    await discord(`/channels/${channel.id}/permissions/${me.id}`, {
+      method: 'PUT',
+      body: { type: 1, allow: '84992', deny: '0' },
+      empty: true,
+    })
+    const previous = channel.permission_overwrites?.find((entry) => entry.id === GUILD_ID)
     await discord(`/channels/${channel.id}/permissions/${GUILD_ID}`, {
       method: 'PUT',
-      body: { type: 0, allow: VIEW_CHANNEL_ALLOW, deny: READ_ONLY_DENY },
+      body: { type: 0, allow: ((BigInt(previous?.allow || '0') | BigInt(VIEW_CHANNEL_ALLOW)) & ~BigInt(READ_ONLY_DENY)).toString(), deny: (BigInt(previous?.deny || '0') | BigInt(READ_ONLY_DENY)).toString() },
       empty: true,
     })
   }
@@ -170,7 +205,7 @@ async function ensureInformationPosts() {
 
   await ensureManagedMessage(requiredChannel('релизы').id, 'releases', {
     title: 'Релизы YM Patcher',
-    description: 'Здесь публикуются Stable и Beta обновления. APK скачивается только через сайт после Discord-авторизации.',
+    description: 'Здесь публикуются релизы патчера из GitHub. Клиентские APK доступны на сайте в каналах Stable и Beta после Discord-авторизации.',
     color: 0x4ADE80,
     fields: [
       { name: 'Stable', value: 'Проверенная сборка для повседневного использования.', inline: true },
@@ -196,6 +231,7 @@ async function ensureWebhook(channelId, name) {
   const webhooks = await discord(`/channels/${channelId}/webhooks`)
   const existing = webhooks.find((webhook) => webhook.type === 1 && webhook.name === name && webhook.token)
   if (existing) return existing
+  if (command !== 'bootstrap') fail(`Missing webhook: ${name}`)
   return discord(`/channels/${channelId}/webhooks`, { method: 'POST', body: { name } })
 }
 
@@ -223,7 +259,7 @@ async function executeWebhook(webhook, body) {
   if (!webhook.token) fail('Discord webhook token is unavailable')
   const response = await fetch(`${DISCORD_API}/webhooks/${webhook.id}/${webhook.token}?wait=true`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'User-Agent': userAgent },
     body: JSON.stringify({ ...body, allowed_mentions: { parse: [] } }),
   })
   if (!response.ok) fail(`Discord webhook request failed (${response.status})`)
@@ -238,7 +274,7 @@ function requiredChannel(name) {
 async function discord(path, options = {}) {
   return request(`${DISCORD_API}${path}`, {
     ...options,
-    headers: { Authorization: `Bot ${BOT_TOKEN}`, ...options.headers },
+    headers: { Authorization: `Bot ${BOT_TOKEN}`, 'User-Agent': userAgent, ...options.headers },
   })
 }
 
@@ -262,10 +298,11 @@ async function request(url, options = {}) {
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(url, { method: options.method || 'GET', headers, body })
+    const response = await fetch(url, { method: options.method || 'GET', headers, body, signal: AbortSignal.timeout(20000) })
     if (response.status === 429) {
       const rateLimit = await response.json().catch(() => ({}))
-      const waitMs = Math.min(10_000, Math.max(250, Number(rateLimit.retry_after || 1) * 1000))
+      const waitMs = Math.max(250, Number(rateLimit.retry_after || 1) * 1000)
+      if (waitMs > 60_000) fail('Discord requested a long rate-limit delay; retry setup later')
       await new Promise((resolve) => setTimeout(resolve, waitMs))
       continue
     }
